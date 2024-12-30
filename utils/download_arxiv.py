@@ -99,6 +99,13 @@ class ArxivPaperFilterDownloader:
 
 # Example usage
 if __name__ == "__main__":
+    
+    ######################################################
+    
+    # The arxiv-metadata.json file can be downloaded from:
+    #################### https://www.kaggle.com/datasets/Cornell-University/arxiv/data ####################
+    
+    ######################################################
     metadata_file_path = "./arxiv-metadata.json"
     output_dir_path = "./cs_ai_2023_pdfs"
     output_file_path = "./cs_ai_2023_ids.txt"
