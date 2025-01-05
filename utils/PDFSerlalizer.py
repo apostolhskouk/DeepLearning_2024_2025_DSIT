@@ -7,7 +7,7 @@ from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from bs4 import BeautifulSoup
-
+from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 
 class DocumentHandler:
     """
@@ -150,12 +150,79 @@ class DocumentHandler:
         if verbose:
             print(f"Document converted and tables exported in {time.time() - start_time:.2f} seconds.")
             
+    def extract_images(self, pdf_path, output_folder, verbose=False,export_pages = True, export_figures = True, export_tables = True):
+        """
+        Extracts images (pages, figures, tables) from a PDF and saves them to the specified folder.
+
+        Args:
+            pdf_path (str): The path to the input PDF file.
+            output_folder (str): The directory where the extracted images will be saved.
+            verbose (bool, optional): If True, prints timing and progress information.
+            export_pages (bool, optional): If True, exports images of pages.
+            export_figures (bool, optional): If True, exports images of figures.
+            export_tables (bool, optional): If True, exports images of tables.
+        """
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        # Configure pipeline options for image extraction
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.images_scale = 2.0  # Adjust image resolution scale
+        pipeline_options.generate_page_images = True
+        pipeline_options.generate_picture_images = True
+        #pipeline_options.generate_table_images = True
+
+        format_options = {
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+
+        start_time = time.time()
+        doc_converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+
+        result = doc_converter.convert(pdf_path)
+        if verbose:
+            print(f"Image extraction started for {pdf_path}...")
+
+        pdf_name = Path(pdf_path).stem
+
+        # Save page images
+        if export_pages:
+            for page_no, page in result.document.pages.items():
+                page_image_filename = os.path.join(output_folder, f"{pdf_name}-page-{page_no}.png")
+                with open(page_image_filename, "wb") as fp:
+                    page.image.pil_image.save(fp, format="PNG")
+
+        # Save images of figures and tables
+        table_counter = 0
+        picture_counter = 0
+        for element, _level in result.document.iterate_items():
+            if isinstance(element, TableItem):
+                if export_tables:
+                    table_counter += 1
+                    element_image_filename = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
+                    with open(element_image_filename, "wb") as fp:
+                        element.get_image(result.document).save(fp, "PNG")
+
+            if isinstance(element, PictureItem):
+                if export_figures:
+                    picture_counter += 1
+                    element_image_filename = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
+                    with open(element_image_filename, "wb") as fp:
+                        element.get_image(result.document).save(fp, "PNG")
+
+        if verbose:
+            print(f"Images extracted and saved to {output_folder} in {time.time() - start_time:.2f} seconds.")
+            
 if __name__ == "__main__":
     # use only the markdown format
     pdf_path = "/home/tolis/Desktop/tolis/DNN/project/cs_ai_2023_pdfs/hard.pdf"
     output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/utils/output/hard"
     doc_handler = DocumentHandler()
-    doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
+    """doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     
@@ -176,3 +243,5 @@ if __name__ == "__main__":
     doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
+    """
+    doc_handler.extract_images(pdf_path, output_dir, verbose=True)
