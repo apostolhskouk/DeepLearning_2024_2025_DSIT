@@ -19,7 +19,6 @@ class DocumentHandler:
         """
         Initializes the DocumentHandler instance with a DocumentConverter.
         """
-        self.converter = DocumentConverter()
 
     def docling_serialize(self, pdf_path, output_folder, mode=None, output_format="markdown", verbose=False):
         """
@@ -50,10 +49,13 @@ class DocumentHandler:
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
         }
         start_time = time.time()
-        if mode == "accurate":
-            result = self.converter.convert(pdf_path, format_options=format_options)
-        else :
-            result = self.converter.convert(pdf_path)
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+        
+        result = converter.convert(pdf_path)
         if verbose:
             print(f"Conversion took {time.time() - start_time:.2f} seconds")
 
@@ -108,16 +110,13 @@ class DocumentHandler:
         pipeline_options = PdfPipelineOptions(do_table_structure=True)
         if mode == "accurate":
             pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-
-        # Convert document
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
         start_time = time.time()
-        format_options = {
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-        }
-        if mode == "accurate":
-            conv_res = self.converter.convert(input_doc_path, format_options=format_options)
-        else:
-            conv_res = self.converter.convert(input_doc_path)
+        conv_res = converter.convert(input_doc_path)
         doc_filename = conv_res.input.file.stem
 
         # Process and export tables
@@ -244,4 +243,5 @@ if __name__ == "__main__":
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     """
-    doc_handler.extract_images(pdf_path, output_dir, verbose=True)
+    #doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=False)
+    doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
