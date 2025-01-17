@@ -3,11 +3,15 @@ import time
 import json
 from pathlib import Path
 import pandas as pd
+import PIL
+from PIL import Image, ImageDraw, ImageFont
+
 from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from bs4 import BeautifulSoup
 from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
+from textwrap import wrap
 
 class DocumentHandler:
     """
@@ -149,10 +153,91 @@ class DocumentHandler:
 
         if verbose:
             print(f"Document converted and tables exported in {time.time() - start_time:.2f} seconds.")
-            
-    def extract_images(self, pdf_path, output_folder, verbose=False,export_pages = True, export_figures = True, export_tables = True,do_ocr = True, do_table_structure = True):
+    
+      
+    def _wrap_text_by_width(self, text: str, max_width: int, font: ImageFont.ImageFont) -> list[str]:
         """
-        Extracts images (pages, figures, tables) from a PDF and saves them to the specified folder.
+        Splits `text` into multiple lines, ensuring each line's width 
+        does not exceed `max_width`.
+        """
+        lines = []
+        words = text.split()
+        if not words:
+            return [text]
+
+        current_line = words[0]
+        for word in words[1:]:
+            test_line = f"{current_line} {word}"
+            w, _ = font.getbbox(test_line)[2:]  
+            if w <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+        lines.append(current_line)
+        return lines
+
+    def _embed_caption_in_image(self, image: PIL.Image.Image, caption: str) -> PIL.Image.Image:
+        """
+        Create a new image with multi-line caption text drawn at the bottom, 
+        wrapping text so it doesn't exceed the original image's width.
+        """
+        caption = caption.strip()
+        if not caption:
+            return image
+
+        try:
+            font = ImageFont.truetype("DejaVuSans.ttf", 18)
+        except OSError:
+            font = ImageFont.load_default()
+
+        # We'll wrap lines so that none exceed the original image's width.
+        max_line_width = image.width
+        wrapped_lines = self._wrap_text_by_width(caption, max_line_width, font)
+
+        # We'll need to measure each line's height:
+        line_heights = [font.getbbox(line)[3] - font.getbbox(line)[1] for line in wrapped_lines]
+        total_text_height = sum(line_heights)
+
+        # Some padding around:
+        padding = 10
+        new_width = image.width + (padding * 2)
+        new_height = image.height + total_text_height + (padding * 2)
+
+        # Create the new extended image (white background)
+        new_img = Image.new("RGB", (new_width, new_height), color=(255, 255, 255))
+        # Paste the original image in the top-center
+        new_img.paste(image, (padding, 0))
+
+        # Draw each wrapped line near the bottom
+        draw_new = ImageDraw.Draw(new_img)
+        current_y = image.height + padding
+
+        for line in wrapped_lines:
+            line_width = font.getbbox(line)[2]  # Measure line width
+            line_x = padding + (image.width - line_width) // 2  # center the text
+            draw_new.text((line_x, current_y), line, fill=(0, 0, 0), font=font)
+            current_y += font.getbbox(line)[3] - font.getbbox(line)[1]  # Move down by line height
+
+        return new_img
+
+
+    def extract_images(
+        self,
+        pdf_path,
+        output_folder,
+        verbose=False,
+        export_pages=True,
+        export_figures=True,
+        export_tables=True,
+        do_ocr=True,
+        do_table_structure=True,
+        add_caption=True,
+    ):
+        """
+        Extracts images (pages, figures, tables) from a PDF and saves them to 
+        the specified folder. Now also embeds each image’s caption as multiline 
+        text if needed.
 
         Args:
             pdf_path (str): The path to the input PDF file.
@@ -161,19 +246,20 @@ class DocumentHandler:
             export_pages (bool, optional): If True, exports images of pages.
             export_figures (bool, optional): If True, exports images of figures.
             export_tables (bool, optional): If True, exports images of tables.
+            do_ocr (bool, optional): If True, triggers OCR on the PDF if needed.
+            do_table_structure (bool, optional): If True, tries to extract structural table info.
         """
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 
         # Configure pipeline options for image extraction
         pipeline_options = PdfPipelineOptions()
-        pipeline_options.images_scale = 2.0  # Adjust image resolution scale
-        pipeline_options.generate_page_images = True
-        pipeline_options.generate_picture_images = True
+        pipeline_options.images_scale = 2.0
+        pipeline_options.generate_page_images = export_pages
+        pipeline_options.generate_picture_images = export_figures
         pipeline_options.do_ocr = do_ocr
         pipeline_options.do_table_structure = do_table_structure
-        #pipeline_options.generate_table_images = True
-
+        pipeline_options.generate_table_images = export_tables
 
         start_time = time.time()
         doc_converter = DocumentConverter(
@@ -191,36 +277,65 @@ class DocumentHandler:
         # Save page images
         if export_pages:
             for page_no, page in result.document.pages.items():
-                page_image_filename = os.path.join(output_folder, f"{pdf_name}-page-{page_no}.png")
-                with open(page_image_filename, "wb") as fp:
-                    page.image.pil_image.save(fp, format="PNG")
+                if page.image and page.image.pil_image:
+                    page_image_filename = os.path.join(
+                        output_folder, f"{pdf_name}-page-{page_no}.png"
+                    )
+                    page.image.pil_image.save(page_image_filename, "PNG")
 
         # Save images of figures and tables
         table_counter = 0
         picture_counter = 0
         for element, _level in result.document.iterate_items():
-            if isinstance(element, TableItem):
-                if export_tables:
-                    table_counter += 1
+            # For TableItem
+            if isinstance(element, TableItem) and export_tables:
+                table_counter += 1
+                if not add_caption:
                     element_image_filename = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
                     with open(element_image_filename, "wb") as fp:
                         element.get_image(result.document).save(fp, "PNG")
+                    continue
+                table_caption = element.caption_text(result.document).strip()
+                table_img = element.get_image(result.document)
+                if table_img:
+                    table_img_with_cap = self._embed_caption_in_image(table_img, table_caption)
+                    element_image_filename = os.path.join(
+                        output_folder, f"{pdf_name}-table-{table_counter}.png"
+                    )
+                    with open(element_image_filename, "wb") as fp:
+                        table_img_with_cap.save(fp, "PNG")
 
-            if isinstance(element, PictureItem):
-                if export_figures:
-                    picture_counter += 1
+            # For PictureItem
+            elif isinstance(element, PictureItem) and export_figures:
+                picture_counter += 1
+                if not add_caption:
                     element_image_filename = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
                     with open(element_image_filename, "wb") as fp:
                         element.get_image(result.document).save(fp, "PNG")
+                    continue
+                figure_caption = element.caption_text(result.document).strip()
+                figure_img = element.get_image(result.document)
+                if figure_img:
+                    fig_img_with_cap = self._embed_caption_in_image(figure_img, figure_caption)
+                    element_image_filename = os.path.join(
+                        output_folder, f"{pdf_name}-picture-{picture_counter}.png"
+                    )
+                    with open(element_image_filename, "wb") as fp:
+                        fig_img_with_cap.save(fp, "PNG")
 
         if verbose:
-            print(f"Images extracted and saved to {output_folder} in {time.time() - start_time:.2f} seconds.")
+            print(
+                f"Images extracted and saved to {output_folder} "
+                f"in {time.time() - start_time:.2f} seconds."
+            )
             
 if __name__ == "__main__":
     # use only the markdown format
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/cs_ai_2023_pdfs/hard.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/utils/output/hard2"
+    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/cs_ai_2024_pdfs/test2.pdf"
+    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"
     doc_handler = DocumentHandler()
+    #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
+    #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="json",verbose=True)
     """doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
@@ -243,6 +358,6 @@ if __name__ == "__main__":
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     """
-    #doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=False)
+    doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=True,add_caption=True)
     #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True,do_ocr=False, do_table_structure=False)
-    doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True,do_ocr=False, do_table_structure=False)
+    #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True,do_ocr=False, do_table_structure=False)
