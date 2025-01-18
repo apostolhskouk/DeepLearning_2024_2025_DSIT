@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import PIL
 from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 
 from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -12,6 +13,7 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMo
 from bs4 import BeautifulSoup
 from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 from textwrap import wrap
+import easyocr
 
 class DocumentHandler:
     """
@@ -23,6 +25,7 @@ class DocumentHandler:
         """
         Initializes the DocumentHandler instance with a DocumentConverter.
         """
+        self.ocr_reader = easyocr.Reader(['en'], gpu=True)
 
     def docling_serialize(self, pdf_path, output_folder, mode=None, output_format="markdown", verbose=False,do_ocr = True, do_table_structure = True):
         """
@@ -221,6 +224,33 @@ class DocumentHandler:
 
         return new_img
 
+    def _is_relevant_image(self, image: PIL.Image.Image) -> bool:
+        """
+        Uses EasyOCR to determine if an image is relevant based on the presence of meaningful text.
+        
+        Args:
+            image (PIL.Image.Image): The image to analyze.
+        
+        Returns:
+            bool: True if the image contains relevant text, False otherwise.
+        """
+        # Convert PIL image to OpenCV-compatible format (np.array)
+        image_np = np.array(image)
+
+        # Run EasyOCR on the image
+        ocr_results = self.ocr_reader.readtext(image_np)
+        extracted_text = " ".join([text for (_, text, _) in ocr_results])
+
+        # Basic filtering: Check if meaningful text is present
+        relevant_keywords = ["figure", "table", "graph", "data"]
+        if any(keyword.lower() in extracted_text.lower() for keyword in relevant_keywords):
+            return True
+
+        # Alternatively, check the text length
+        if len(extracted_text.strip()) > 20:  # Arbitrary threshold
+            return True
+
+        return False
 
     def extract_images(
         self,
@@ -316,6 +346,10 @@ class DocumentHandler:
                 figure_caption = element.caption_text(result.document).strip()
                 figure_img = element.get_image(result.document)
                 if figure_img:
+                    if not self._is_relevant_image(figure_img):
+                        if verbose:
+                            print("Skipping irrelevant image.")
+                        continue                    
                     fig_img_with_cap = self._embed_caption_in_image(figure_img, figure_caption)
                     element_image_filename = os.path.join(
                         output_folder, f"{pdf_name}-picture-{picture_counter}.png"
@@ -332,7 +366,7 @@ class DocumentHandler:
 if __name__ == "__main__":
     # use only the markdown format
     pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/cs_ai_2024_pdfs/test2.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"
+    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
     doc_handler = DocumentHandler()
     #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="json",verbose=True)
