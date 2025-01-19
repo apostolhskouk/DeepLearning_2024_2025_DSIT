@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 from textwrap import wrap
 import easyocr
+import re
 
 class DocumentHandler:
     """
@@ -224,12 +225,13 @@ class DocumentHandler:
 
         return new_img
 
-    def _is_relevant_image(self, image: PIL.Image.Image) -> bool:
+    def _is_relevant_image(self, image: PIL.Image.Image, caption: str) -> bool:
         """
         Uses EasyOCR to determine if an image is relevant based on the presence of meaningful text.
         
         Args:
             image (PIL.Image.Image): The image to analyze.
+            caption (str): The caption associated with the image.
         
         Returns:
             bool: True if the image contains relevant text, False otherwise.
@@ -242,15 +244,24 @@ class DocumentHandler:
         extracted_text = " ".join([text for (_, text, _) in ocr_results])
 
         # Basic filtering: Check if meaningful text is present
-        relevant_keywords = ["figure", "table", "graph", "data"]
-        if any(keyword.lower() in extracted_text.lower() for keyword in relevant_keywords):
+        relevant_keywords = ["figure", "fig", "table", "graph", "data"]
+        if any(keyword.lower() in caption.lower() for keyword in relevant_keywords):
+            return True
+        elif any(keyword.lower() in extracted_text.lower() for keyword in relevant_keywords):
             return True
 
         # Alternatively, check the text length
-        if len(extracted_text.strip()) > 20:  # Arbitrary threshold
+        if len(extracted_text.strip()) > 10:  # Arbitrary threshold
             return True
 
         return False
+
+    def _is_reference_table(self, ocr_result):
+        citation_pattern = re.compile(r'\[\d+\]')
+        citation_count = sum(1 for _, text, _ in ocr_result if citation_pattern.search(text))
+
+        # Heuristic: If there are multiple citations, it's likely a reference table
+        return citation_count > 5
 
     def extract_images(
         self,
@@ -327,13 +338,24 @@ class DocumentHandler:
                     continue
                 table_caption = element.caption_text(result.document).strip()
                 table_img = element.get_image(result.document)
+                temp_image_path = "temp_table_img.png"
+                table_img.save("temp_table_img.png", "PNG")  # Save the image temporarily
+                ocr_result = self.ocr_reader.readtext(temp_image_path)
+
                 if table_img:
+                    if (table_caption=="" or table_caption is None) and self._is_reference_table(ocr_result):
+                        if verbose:
+                            print("Skipping reference table.")
+                        continue
                     table_img_with_cap = self._embed_caption_in_image(table_img, table_caption)
                     element_image_filename = os.path.join(
                         output_folder, f"{pdf_name}-table-{table_counter}.png"
                     )
                     with open(element_image_filename, "wb") as fp:
                         table_img_with_cap.save(fp, "PNG")
+
+                # Delete the temporary image file
+                os.remove(temp_image_path)
 
             # For PictureItem
             elif isinstance(element, PictureItem) and export_figures:
@@ -346,7 +368,7 @@ class DocumentHandler:
                 figure_caption = element.caption_text(result.document).strip()
                 figure_img = element.get_image(result.document)
                 if figure_img:
-                    if not self._is_relevant_image(figure_img):
+                    if not self._is_relevant_image(figure_img, figure_caption):
                         if verbose:
                             print("Skipping irrelevant image.")
                         continue                    
@@ -367,6 +389,10 @@ if __name__ == "__main__":
     # use only the markdown format
     pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/cs_ai_2024_pdfs/test2.pdf"
     output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
+
+    # pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/1901.11398.pdf"
+    # pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/2304.10985.pdf"
+    # output_dir = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/output"
     doc_handler = DocumentHandler()
     #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="json",verbose=True)
