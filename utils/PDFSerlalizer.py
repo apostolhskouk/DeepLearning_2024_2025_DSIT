@@ -85,6 +85,7 @@ class DocumentHandler:
                 f.write(result.document._export_to_indented_text())
         else:
             raise ValueError(f"Unsupported output format '{output_format}'.")
+        return output_file
 
     def export_tables_from_pdf(self, pdf_path, output_folder, export_format="csv", mode=None, verbose=False,do_ocr = True, do_table_structure = True):
         """
@@ -274,6 +275,7 @@ class DocumentHandler:
         do_ocr=True,
         do_table_structure=True,
         add_caption=True,
+        filter_irrelevant=True,
     ):
         """
         Extracts images (pages, figures, tables) from a PDF and saves them to 
@@ -368,7 +370,7 @@ class DocumentHandler:
                 figure_caption = element.caption_text(result.document).strip()
                 figure_img = element.get_image(result.document)
                 if figure_img:
-                    if not self._is_relevant_image(figure_img, figure_caption):
+                    if filter_irrelevant and not self._is_relevant_image(figure_img, figure_caption):
                         if verbose:
                             print("Skipping irrelevant image.")
                         continue                    
@@ -418,6 +420,6 @@ if __name__ == "__main__":
     #also export the tables
     doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
     """
-    doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=True,add_caption=True)
+    doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=True,add_caption=True, filter_irrelevant=True)
     #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True,do_ocr=False, do_table_structure=False)
     #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True,do_ocr=False, do_table_structure=False)
