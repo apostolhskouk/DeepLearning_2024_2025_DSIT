@@ -28,7 +28,7 @@ class DocumentHandler:
         """
         self.ocr_reader = easyocr.Reader(['en'], gpu=True)
 
-    def docling_serialize(self, pdf_path, output_folder, mode=None, output_format="markdown", verbose=False,do_ocr = True, do_table_structure = True):
+    def docling_serialize(self, pdf_path, output_folder, mode=None, output_format="markdown", verbose=False,do_ocr = True, do_table_structure = True,strict_text = False,image_placeholder: str = "<!-- image -->"):
         """
         Converts a PDF to various output formats using Docling.
 
@@ -70,7 +70,7 @@ class DocumentHandler:
         if output_format == "markdown":
             output_file = os.path.join(output_folder, f"{pdf_name}_docling.md")
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write(result.document.export_to_markdown())
+                f.write(result.document.export_to_markdown(strict_text=strict_text,image_placeholder=image_placeholder))
         elif output_format == "json":
             output_file = os.path.join(output_folder, f"{pdf_name}_docling.json")
             with open(output_file, "w", encoding="utf-8") as f:
