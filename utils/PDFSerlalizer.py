@@ -6,7 +6,7 @@ import pandas as pd
 import PIL
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
-
+import fitz
 from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
@@ -15,6 +15,11 @@ from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 from textwrap import wrap
 import easyocr
 import re
+import tempfile
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+import torch
+
 
 class DocumentHandler:
     """
@@ -22,11 +27,11 @@ class DocumentHandler:
     and exporting tables from PDFs to structured formats.
     """
 
-    def __init__(self):
+    def __init__(self,use_gpu = True):
         """
         Initializes the DocumentHandler instance with a DocumentConverter.
         """
-        self.ocr_reader = easyocr.Reader(['en'], gpu=True)
+        self.ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
 
     def docling_serialize(self, pdf_path, output_folder, mode=None, output_format="markdown", verbose=False,do_ocr = True, do_table_structure = True,strict_text = False,image_placeholder: str = "<!-- image -->"):
         """
@@ -276,150 +281,264 @@ class DocumentHandler:
         do_table_structure=True,
         add_caption=True,
         filter_irrelevant=True,
+        generate_metadata=False,
+        generate_annotated_pdf=False,
+        generate_descriptions=False,
     ):
         """
-        Extracts images (pages, figures, tables) from a PDF and saves them to 
-        the specified folder. Now also embeds each image’s caption as multiline 
-        text if needed.
-
-        Args:
-            pdf_path (str): The path to the input PDF file.
-            output_folder (str): The directory where the extracted images will be saved.
-            verbose (bool, optional): If True, prints timing and progress information.
-            export_pages (bool, optional): If True, exports images of pages.
-            export_figures (bool, optional): If True, exports images of figures.
-            export_tables (bool, optional): If True, exports images of tables.
-            do_ocr (bool, optional): If True, triggers OCR on the PDF if needed.
-            do_table_structure (bool, optional): If True, tries to extract structural table info.
+        Extracts images from PDF with captions, metadata, and annotated PDF support.
         """
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
+        if generate_descriptions:
+        
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if not hasattr(self, 'desc_model'):
+                self.desc_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    "Qwen/Qwen2-VL-2B-Instruct",
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2",
+                    device_map="auto",
+                ).to(device)
+                self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
+    
+        metadata = []
+        pdf_name = Path(pdf_path).stem
+        annotated_pdf_path = os.path.join(output_folder, f"{pdf_name}-annotated.pdf") if generate_annotated_pdf else None
 
-        # Configure pipeline options for image extraction
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.images_scale = 2.0
-        pipeline_options.generate_page_images = export_pages
-        pipeline_options.generate_picture_images = export_figures
-        pipeline_options.do_ocr = do_ocr
-        pipeline_options.do_table_structure = do_table_structure
-        pipeline_options.generate_table_images = export_tables
+        # Configure processing pipeline
+        pipeline_options = PdfPipelineOptions(
+            images_scale=2.0,
+            generate_page_images=export_pages,
+            generate_picture_images=export_figures,
+            do_ocr=do_ocr,
+            do_table_structure=do_table_structure,
+            generate_table_images=export_tables
+        )
 
         start_time = time.time()
         doc_converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
         )
-
         result = doc_converter.convert(pdf_path)
+
         if verbose:
-            print(f"Image extraction started for {pdf_path}...")
+            print(f"Processing PDF: {pdf_path}...")
 
-        pdf_name = Path(pdf_path).stem
-
-        # Save page images
+        # Process pages
         if export_pages:
             for page_no, page in result.document.pages.items():
                 if page.image and page.image.pil_image:
-                    page_image_filename = os.path.join(
-                        output_folder, f"{pdf_name}-page-{page_no}.png"
-                    )
-                    page.image.pil_image.save(page_image_filename, "PNG")
+                    img_path = os.path.join(output_folder, f"{pdf_name}-page-{page_no}.png")
+                    page.image.pil_image.save(img_path, "PNG")
+                    
+                    if generate_metadata:
+                        scale = pipeline_options.images_scale
+                        meta_entry = {
+                            "filename": os.path.basename(img_path),
+                            "type": "page",
+                            "page_no": page_no,
+                            "bbox": {
+                                "l": 0.0,
+                                "t": 0.0,
+                                "r": page.image.pil_image.width / scale,
+                                "b": page.image.pil_image.height / scale
+                                #"coord_origin": "top-left"
+                            }
+                        }
+                        metadata.append(meta_entry)
 
-        # Save images of figures and tables
-        table_counter = 0
-        picture_counter = 0
-        for element, _level in result.document.iterate_items():
-            # For TableItem
+        # Process tables and figures
+        table_counter, picture_counter = 0, 0
+        for element, _ in result.document.iterate_items():
+            # Table processing
             if isinstance(element, TableItem) and export_tables:
                 table_counter += 1
-                if not add_caption:
-                    element_image_filename = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
-                    with open(element_image_filename, "wb") as fp:
-                        element.get_image(result.document).save(fp, "PNG")
-                    continue
+                img_path = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
                 table_caption = element.caption_text(result.document).strip()
-                table_img = element.get_image(result.document)
-                temp_image_path = "temp_table_img.png"
-                table_img.save("temp_table_img.png", "PNG")  # Save the image temporarily
-                ocr_result = self.ocr_reader.readtext(temp_image_path)
-
-                if table_img:
-                    if (table_caption=="" or table_caption is None) and self._is_reference_table(ocr_result):
-                        if verbose:
-                            print("Skipping reference table.")
+                
+                # Process table image
+                with tempfile.NamedTemporaryFile(suffix=".png") as temp_file:
+                    element.get_image(result.document).save(temp_file.name, "PNG")
+                    if self._is_reference_table(self.ocr_reader.readtext(temp_file.name)):
+                        if verbose: print("Skipping reference table")
                         continue
-                    table_img_with_cap = self._embed_caption_in_image(table_img, table_caption)
-                    element_image_filename = os.path.join(
-                        output_folder, f"{pdf_name}-table-{table_counter}.png"
-                    )
-                    with open(element_image_filename, "wb") as fp:
-                        table_img_with_cap.save(fp, "PNG")
+                    
+                    final_img = self._embed_caption_in_image(Image.open(temp_file.name), table_caption) if add_caption else Image.open(temp_file.name)
+                    final_img.save(img_path, "PNG")
 
-                # Delete the temporary image file
-                os.remove(temp_image_path)
+                # Add metadata
+                if generate_metadata:
+                    prov = element.prov[0]
+                    bbox = prov.bbox.to_top_left_origin(result.document.pages[prov.page_no].size.height)
+                    if generate_descriptions:
+                        try:
+                            messages = [{
+                                "role": "user",
+                                "content": [
+                                    {"type": "image", "image": img_path},
+                                    {"type": "text", "text": """
+                                        Given this table from a scientific paper, provide a single technically precise sentence that:
+                                        1. States the type of visualization
+                                        2. Describes the main scientific concept or finding shown
+                                        3. Mentions key variables or metrics involved
+                                        Keep under 50 words with technical terms. Focus on core message.
+                                    """}
+                                ]
+                            }]
 
-            # For PictureItem
+                            text = self.desc_processor.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            )
+                            image_inputs, video_inputs = process_vision_info(messages)
+
+                            inputs = self.desc_processor(
+                                text=[text],
+                                images=image_inputs,
+                                videos=video_inputs,
+                                padding=True,
+                                return_tensors="pt",
+                            ).to(device)
+
+                            generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
+                            generated_ids_trimmed = [
+                                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                            ]
+                            desc = self.desc_processor.batch_decode(
+                                generated_ids_trimmed, 
+                                skip_special_tokens=True, 
+                                clean_up_tokenization_spaces=False
+                            )[0]
+                            
+                        except Exception as e:
+                            desc = "Description generation failed"
+                    
+                    metadata.append({
+                        "filename": os.path.basename(img_path),
+                        "type": "table",
+                        "page_no": prov.page_no,
+                        "bbox": bbox.model_dump(),
+                        "caption": table_caption or None,
+                        "description": desc.strip() if generate_descriptions else None
+                    })
+
+            # Figure processing
             elif isinstance(element, PictureItem) and export_figures:
                 picture_counter += 1
-                if not add_caption:
-                    element_image_filename = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
-                    with open(element_image_filename, "wb") as fp:
-                        element.get_image(result.document).save(fp, "PNG")
-                    continue
+                img_path = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
                 figure_caption = element.caption_text(result.document).strip()
-                figure_img = element.get_image(result.document)
-                if figure_img:
-                    if filter_irrelevant and not self._is_relevant_image(figure_img, figure_caption):
-                        if verbose:
-                            print("Skipping irrelevant image.")
-                        continue                    
-                    fig_img_with_cap = self._embed_caption_in_image(figure_img, figure_caption)
-                    element_image_filename = os.path.join(
-                        output_folder, f"{pdf_name}-picture-{picture_counter}.png"
-                    )
-                    with open(element_image_filename, "wb") as fp:
-                        fig_img_with_cap.save(fp, "PNG")
+                
+                if filter_irrelevant and not self._is_relevant_image(
+                    element.get_image(result.document), figure_caption
+                ):
+                    if verbose: print("Skipping irrelevant image")
+                    continue
+                
+                # Save image with caption
+                img = self._embed_caption_in_image(
+                    element.get_image(result.document), 
+                    figure_caption
+                )
+                img.save(img_path, "PNG")
+
+                # Add metadata
+                if generate_metadata:
+                    prov = element.prov[0]
+                    bbox = prov.bbox.to_top_left_origin(result.document.pages[prov.page_no].size.height)
+                    if generate_descriptions:
+                        try:
+                            messages = [{
+                                "role": "user",
+                                "content": [
+                                    {"type": "image", "image": img_path},
+                                    {"type": "text", "text": """
+                                        Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                        1. States the type of visualization
+                                        2. Describes the main scientific concept or finding shown
+                                        3. Mentions key variables or metrics involved
+                                        Keep under 50 words with technical terms. Focus on core message.
+                                    """}
+                                ]
+                            }]
+
+                            text = self.desc_processor.apply_chat_template(
+                                messages, tokenize=False, add_generation_prompt=True
+                            )
+                            image_inputs, video_inputs = process_vision_info(messages)
+
+                            inputs = self.desc_processor(
+                                text=[text],
+                                images=image_inputs,
+                                videos=video_inputs,
+                                padding=True,
+                                return_tensors="pt",
+                            ).to(device)
+
+                            generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
+                            generated_ids_trimmed = [
+                                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                            ]
+                            desc = self.desc_processor.batch_decode(
+                                generated_ids_trimmed, 
+                                skip_special_tokens=True, 
+                                clean_up_tokenization_spaces=False
+                            )[0]
+                            
+                        except Exception as e:
+                            desc = "Description generation failed"
+                    metadata.append({
+                        "filename": os.path.basename(img_path),
+                        "type": "picture",
+                        "page_no": prov.page_no,
+                        "bbox": bbox.model_dump(),
+                        "caption": figure_caption or None,
+                        "description": desc.strip() if generate_descriptions else None
+                    })
+
+        # Generate metadata file
+        if generate_metadata:
+            metadata_path = os.path.join(output_folder, "metadata.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=4, default=lambda x: x.model_dump() if hasattr(x, 'model_dump') else x)
+            if verbose:
+                print(f"Metadata saved to {metadata_path}")
+
+        # Generate annotated PDF
+        if generate_annotated_pdf:
+            doc = fitz.open(pdf_path)
+            annot_config = {
+                "page": {"color": (1,0,0), "width": 1.5},
+                "table": {"color": (0,0.5,0), "width": 1.2},
+                "picture": {"color": (0,0,1), "width": 1.0}
+            }
+            
+            for entry in metadata:
+                page = doc[entry["page_no"] - 1]
+                rect = fitz.Rect(entry["bbox"]["l"], entry["bbox"]["t"], entry["bbox"]["r"], entry["bbox"]["b"])
+                annot = page.add_rect_annot(rect)
+                style = annot_config[entry["type"]]
+                annot.set_border(width=style["width"], dashes=[0])
+                annot.set_colors(stroke=style["color"], fill=None)
+                annot.set_opacity(0.7)
+            
+            doc.save(annotated_pdf_path)
+            if verbose:
+                print(f"Annotated PDF saved to {annotated_pdf_path}")
 
         if verbose:
-            print(
-                f"Images extracted and saved to {output_folder} "
-                f"in {time.time() - start_time:.2f} seconds."
-            )
-            
+            duration = time.time() - start_time
+            print(f"Process completed in {duration:.2f} seconds")
+
+        return {
+            "image_count": table_counter + picture_counter,
+            "metadata_path": os.path.join(output_folder, "metadata.json") if generate_metadata else None,
+            "annotated_pdf_path": annotated_pdf_path,
+            "descriptions_generated": generate_descriptions
+        }
+
 if __name__ == "__main__":
-    # use only the markdown format
     pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/cs_ai_2024_pdfs/test2.pdf"
     output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
-
-    # pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/1901.11398.pdf"
-    # pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/2304.10985.pdf"
-    # output_dir = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/output"
+    
     doc_handler = DocumentHandler()
-    #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
-    #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="json",verbose=True)
-    """doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
-    #also export the tables
-    doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
-    
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/cs_ai_2023_pdfs/hard_multicolumns.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/utils/output/hard_multicolumns"
-    doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
-    #also export the tables
-    doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
-
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/cs_ai_2023_pdfs/hard_image_and_many.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/utils/output/hard_image_and_many"
-    doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
-    #also export the tables
-    doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
-    
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/cs_ai_2023_pdfs/hard_confusing.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/utils/output/hard_confusing"
-    doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True)
-    #also export the tables
-    doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True)
-    """
-    doc_handler.extract_images(pdf_path, output_dir, verbose=True,export_pages=False, export_figures=True, export_tables=True,add_caption=True, filter_irrelevant=True)
-    #doc_handler.export_tables_from_pdf(pdf_path, output_dir, export_format="markdown", mode=None, verbose=True,do_ocr=False, do_table_structure=False)
-    #doc_handler.docling_serialize(pdf_path, output_dir, mode=None, output_format="markdown",verbose=True,do_ocr=False, do_table_structure=False)
+    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True)
