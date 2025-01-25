@@ -19,6 +19,8 @@ import tempfile
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
+import re
+from datetime import datetime
 
 
 class DocumentHandler:
@@ -263,11 +265,37 @@ class DocumentHandler:
         return False
 
     def _is_reference_table(self, ocr_result):
-        citation_pattern = re.compile(r'\[\d+\]')
-        citation_count = sum(1 for _, text, _ in ocr_result if citation_pattern.search(text))
+        # Patterns to detect citations
+        citation_pattern = re.compile(r'\[\w+[\+\-\.]?\w*\]')  # Matches Alphanumeric Citations ([1], [A+15], etc.)
+        
+        # Pattern to detect reference headers
+        reference_header_pattern = re.compile(r'(References|Bibliography|Citations)', re.IGNORECASE)
+        
+        # Pattern to detect common reference-related terms
+        reference_context_pattern = re.compile(
+            r'(et al\.|pp\.|vol\.|no\.|ed\.|journal|conference|proceedings|arxiv|preprint|doi|http|https|www\.)', 
+            re.IGNORECASE
+        )
+        
+        citation_count = 0
+        has_reference_header = False
+        has_reference_context = False
 
-        # Heuristic: If there are multiple citations, it's likely a reference table
-        return citation_count > 5
+        for _, text, _ in ocr_result:
+            # Count citations
+            if citation_pattern.search(text):
+                citation_count += 1
+            
+            # Check for reference headers
+            if reference_header_pattern.search(text):
+                has_reference_header = True
+            
+            # Check for reference context
+            if reference_context_pattern.search(text):
+                has_reference_context = True
+
+        # Heuristic: If there are multiple citations, a reference header, or reference-related context, it's likely a reference table
+        return (citation_count > 5) or has_reference_header or has_reference_context
 
     def extract_images(
         self,
