@@ -341,7 +341,8 @@ class DocumentHandler:
             generate_picture_images=export_figures,
             do_ocr=do_ocr,
             do_table_structure=do_table_structure,
-            generate_table_images=export_tables
+            generate_table_images=export_tables,
+            do_picture_classification=True
         )
 
         start_time = time.time()
@@ -349,7 +350,6 @@ class DocumentHandler:
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
         )
         result = doc_converter.convert(pdf_path)
-
         if verbose:
             print(f"Processing PDF: {pdf_path}...")
 
@@ -452,15 +452,16 @@ class DocumentHandler:
 
             # Figure processing
             elif isinstance(element, PictureItem) and export_figures:
+                classification_data = element.annotations[0]
                 picture_counter += 1
                 img_path = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
                 figure_caption = element.caption_text(result.document).strip()
                 
-                if filter_irrelevant and not self._is_relevant_image(
-                    element.get_image(result.document), figure_caption
-                ):
-                    if verbose: print("Skipping irrelevant image")
-                    continue
+                if filter_irrelevant: 
+                    if not self._is_relevant_image( element.get_image(result.document), figure_caption) or "natural_image" in classification_data.predicted_classes[0].class_name:
+                        if verbose: 
+                            print("Skipping irrelevant image")
+                        continue
                 
                 # Save image with caption
                 img = self._embed_caption_in_image(
