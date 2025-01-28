@@ -265,37 +265,11 @@ class DocumentHandler:
         return False
 
     def _is_reference_table(self, ocr_result):
-        # Patterns to detect citations
-        citation_pattern = re.compile(r'\[\w+[\+\-\.]?\w*\]')  # Matches Alphanumeric Citations ([1], [A+15], etc.)
-        
-        # Pattern to detect reference headers
-        reference_header_pattern = re.compile(r'(References|Bibliography|Citations)', re.IGNORECASE)
-        
-        # Pattern to detect common reference-related terms
-        reference_context_pattern = re.compile(
-            r'(et al\.|pp\.|vol\.|no\.|ed\.|journal|conference|proceedings|arxiv|preprint|doi|http|https|www\.)', 
-            re.IGNORECASE
-        )
-        
-        citation_count = 0
-        has_reference_header = False
-        has_reference_context = False
+        citation_pattern = re.compile(r'\[\d+\]')
+        citation_count = sum(1 for _, text, _ in ocr_result if citation_pattern.search(text))
 
-        for _, text, _ in ocr_result:
-            # Count citations
-            if citation_pattern.search(text):
-                citation_count += 1
-            
-            # Check for reference headers
-            if reference_header_pattern.search(text):
-                has_reference_header = True
-            
-            # Check for reference context
-            if reference_context_pattern.search(text):
-                has_reference_context = True
-
-        # Heuristic: If there are multiple citations, a reference header, or reference-related context, it's likely a reference table
-        return (citation_count > 5) or has_reference_header or has_reference_context
+        # Heuristic: If there are multiple citations, it's likely a reference table
+        return citation_count > 5
 
     def extract_chunks(self, pdf_path, output_folder, verbose=False, mode="fast"):
         """
@@ -350,6 +324,7 @@ class DocumentHandler:
         generate_metadata=False,
         generate_annotated_pdf=False,
         generate_descriptions=False,
+        generate_table_markdown=False
     ):
         """
         Extracts images from PDF with captions, metadata, and annotated PDF support.
@@ -379,8 +354,7 @@ class DocumentHandler:
             generate_picture_images=export_figures,
             do_ocr=do_ocr,
             do_table_structure=do_table_structure,
-            generate_table_images=export_tables,
-            do_picture_classification=True
+            generate_table_images=export_tables
         )
 
         start_time = time.time()
@@ -388,6 +362,7 @@ class DocumentHandler:
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
         )
         result = doc_converter.convert(pdf_path)
+
         if verbose:
             print(f"Processing PDF: {pdf_path}...")
 
@@ -423,7 +398,6 @@ class DocumentHandler:
                 img_path = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
                 table_caption = element.caption_text(result.document).strip()
                 
-                # Process table image
                 with tempfile.NamedTemporaryFile(suffix=".png") as temp_file:
                     element.get_image(result.document).save(temp_file.name, "PNG")
                     if self._is_reference_table(self.ocr_reader.readtext(temp_file.name)):
@@ -437,6 +411,8 @@ class DocumentHandler:
                 if generate_metadata:
                     prov = element.prov[0]
                     bbox = prov.bbox.to_top_left_origin(result.document.pages[prov.page_no].size.height)
+                    if generate_table_markdown:
+                        table_markdown = element.export_to_markdown()
                     if generate_descriptions:
                         try:
                             messages = [{
@@ -485,21 +461,21 @@ class DocumentHandler:
                         "page_no": prov.page_no,
                         "bbox": bbox.model_dump(),
                         "caption": table_caption or None,
-                        "description": desc.strip() if generate_descriptions else None
+                        "description": desc.strip() if generate_descriptions else None,
+                        "markdown": table_markdown if generate_table_markdown else None
                     })
 
             # Figure processing
             elif isinstance(element, PictureItem) and export_figures:
-                classification_data = element.annotations[0]
                 picture_counter += 1
                 img_path = os.path.join(output_folder, f"{pdf_name}-picture-{picture_counter}.png")
                 figure_caption = element.caption_text(result.document).strip()
                 
-                if filter_irrelevant: 
-                    if not self._is_relevant_image( element.get_image(result.document), figure_caption) or "natural_image" in classification_data.predicted_classes[0].class_name:
-                        if verbose: 
-                            print("Skipping irrelevant image")
-                        continue
+                if filter_irrelevant and not self._is_relevant_image(
+                    element.get_image(result.document), figure_caption
+                ):
+                    if verbose: print("Skipping irrelevant image")
+                    continue
                 
                 # Save image with caption
                 img = self._embed_caption_in_image(
@@ -608,5 +584,5 @@ if __name__ == "__main__":
     output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
     
     doc_handler = DocumentHandler()
-    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True)
+    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True)
     # doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
