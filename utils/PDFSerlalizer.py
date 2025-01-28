@@ -21,7 +21,7 @@ from qwen_vl_utils import process_vision_info
 import torch
 import re
 from datetime import datetime
-
+from docling.chunking import HybridChunker
 
 class DocumentHandler:
     """
@@ -297,6 +297,44 @@ class DocumentHandler:
         # Heuristic: If there are multiple citations, a reference header, or reference-related context, it's likely a reference table
         return (citation_count > 5) or has_reference_header or has_reference_context
 
+    def extract_chunks(self, pdf_path, output_folder, verbose=False, mode="fast"):
+        """
+        Extracts text chunks from a PDF file and saves them as individual text files.
+        """
+        
+        start_time = time.time()
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        pipeline_options = PdfPipelineOptions(do_table_structure=True)
+        if mode == "accurate":
+            pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+            
+        doc_converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+        )
+        result = doc_converter.convert(pdf_path)
+        doc = result.document
+        
+        chunker = HybridChunker(tokenizer="BAAI/bge-small-en-v1.5")  # set tokenizer as needed
+        chunk_iter = chunker.chunk(doc)
+        chunk_list = list(chunk_iter)
+        fileName = "docling-chunks.txt"
+        chunk_filename = os.path.join(output_folder, fileName)
+        for chunk_ix, chunk in enumerate(chunk_list):
+            chunk_heading = chunk.meta.headings[0]
+            chunk_text = chunk.text
+
+            with open(chunk_filename, "a", encoding="utf-8") as f:
+                f.write(f"Chunk {chunk_ix + 1}:\n")
+                f.write(f"Heading: {chunk_heading}\n")
+                f.write(chunk_text)
+                f.write("\n\n")            
+
+        if verbose:
+            duration = time.time() - start_time
+            print(f"Text chunks extracted in {duration:.2f} seconds")
+
     def extract_images(
         self,
         pdf_path,
@@ -571,3 +609,4 @@ if __name__ == "__main__":
     
     doc_handler = DocumentHandler()
     doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True)
+    # doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
