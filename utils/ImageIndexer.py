@@ -142,11 +142,21 @@ class CLIPIndexer:
         distances, indices = index.search(query_emb.astype("float32"), top_k)
         return [(image_paths[i], d) for i, d in zip(indices[0], distances[0])]
 
+from io import BytesIO
+
+def pil_image_to_bytes(img):
+    # Save the image to a BytesIO buffer
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
 class ImageRAG:
-    def __init__(self, model, processor, device="cuda"):
+    def __init__(self, model, processor, image_paths, device="cuda"):
         self.model = model
         self.processor = processor
         self.device = device
+        self.image_paths = image_paths
         self.embeddings = []
         self.image_base64s = []
 
@@ -198,7 +208,7 @@ class ImageRAG:
         for similarity, idx in zip(top_k_values, top_k_indices):
             results.append({
                 'similarity': similarity.item(),
-                'image_base64': self.image_base64s[idx],
+                'image_path': self.image_paths[idx],
                 'index': idx.item()
             })
         return results
@@ -226,7 +236,7 @@ def get_batch_image_embeddings(images, model, processor, batch_size=2):
 class ByaldiIndexer:
     @staticmethod
     def create_index(input_folder, index_path, index_name="pdfs_images", 
-                    model_name="vidore/colqwen2-v1.0"):
+                    model_name="vidore/colpali-v1.2"):
         os.makedirs(index_path, exist_ok=True)
         
         model = RAGMultiModalModel.from_pretrained(model_name, index_root=index_path)
@@ -247,23 +257,32 @@ class ByaldiIndexer:
         return [(r.metadata['filename'], r.score) for r in results]
 
     @staticmethod
-    def query_by_image(query_img_path, image_dir, index_path, index_name="pdfs_images", model_name="vidore/colqwen2-v1.0", top_k=5):
+    def query_by_image(query_img_path, image_dir, index_path, index_name="pdfs_images", model_name="vidore/colpali-v1.2", top_k=5):
         model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
         colpali_model = model.model.model
         device = "cuda" if torch.cuda.is_available() else "cpu"
         processor = ColPaliProcessor.from_pretrained(model_name)
-        image_rag = ImageRAG(colpali_model, processor, device=device)
+        image_paths = [
+            os.path.join(image_dir, file) for file in os.listdir(image_dir)
+            if file.endswith(".png")
+        ]
         extracted_images = [
             Image.open(os.path.join(image_dir, file)) for file in os.listdir(image_dir)
             if file.endswith(".png")
         ]
+        image_rag = ImageRAG(colpali_model, processor, image_paths, device=device)
         # Generate embeddings for the extracted images
         embeddings = get_batch_image_embeddings(extracted_images, colpali_model, processor, batch_size=2)
         # Add images and embeddings to ImageRAG
         image_rag.add_images_and_embeddings(extracted_images, embeddings)
-
-        return image_rag.find_similar_images(Image.open(query_img_path), top_k=top_k)       
-
+        results = image_rag.find_similar_images(Image.open(query_img_path), top_k=top_k)
+        # Convert results to the desired format with np.str_ and np.float32
+        formatted_results = [
+            (np.str_(result['image_path']), np.float32(result['similarity'])) for result in results
+        ]
+        
+        return formatted_results
+    
 def visualize_results(results, input_folder=None):
     plt.figure(figsize=(20, 10))
     for i, (path, score) in enumerate(results):
