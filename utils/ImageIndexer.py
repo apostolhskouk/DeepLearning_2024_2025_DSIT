@@ -8,6 +8,13 @@ from transformers import AutoModel, AutoImageProcessor, ResNetModel
 from torch.nn import AdaptiveAvgPool2d
 from pathlib import Path
 from byaldi import RAGMultiModalModel
+from torch.utils.data import DataLoader
+from colpali_engine.models import ColPali, ColPaliProcessor
+from byaldi.objects import Result
+import base64
+import io
+from tqdm import tqdm
+from PDFSerlalizer import DocumentHandler
 
 class ResNetIndexer:
     @staticmethod
@@ -136,10 +143,91 @@ class CLIPIndexer:
         distances, indices = index.search(query_emb.astype("float32"), top_k)
         return [(image_paths[i], d) for i, d in zip(indices[0], distances[0])]
 
+class ImageRAG:
+    def __init__(self, model, processor, device="cuda"):
+        self.model = model
+        self.processor = processor
+        self.device = device
+        self.embeddings = []
+        self.image_base64s = []
+
+    def _image_to_base64(self, image):
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode()
+
+    def _base64_to_image(self, base64_str):
+        image_data = base64.b64decode(base64_str)
+        return Image.open(io.BytesIO(image_data))
+
+    def add_images_and_embeddings(self, images, embeddings):
+        assert len(images) == len(embeddings)
+        self.embeddings = embeddings
+        for img in images:
+            self.image_base64s.append(self._image_to_base64(img))
+
+    def find_similar_images(self, query_image, top_k=5, batch_size=4):
+        # Process the query image
+        processed_query = self.processor.process_images([query_image])
+        processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
+        
+        with torch.no_grad():
+            query_embedding = self.model(**processed_query)
+            if self.device == "cuda":
+                query_embedding = query_embedding.float()  # Ensure query_embedding is float32
+            query_embedding = query_embedding.cpu()
+
+        # Cast the query embedding to bfloat16 to match indexed embeddings' dtype
+        query_embedding = query_embedding.to(torch.bfloat16)
+
+        # Score similarity between query and indexed images
+        scores = []
+        for i in range(0, len(self.embeddings), batch_size):
+            batch_embeddings = self.embeddings[i:i + batch_size]
+            batch_scores = []
+            for emb in batch_embeddings:
+                similarity = torch.matmul(query_embedding, emb.t())
+                max_similarity = similarity.max(dim=-1)[0]
+                score = max_similarity.sum()
+                batch_scores.append(score)
+            scores.extend(batch_scores)
+
+        scores = torch.tensor(scores)
+        top_k_values, top_k_indices = torch.topk(scores, min(top_k, len(scores)))
+
+        results = []
+        for similarity, idx in zip(top_k_values, top_k_indices):
+            results.append({
+                'similarity': similarity.item(),
+                'image_base64': self.image_base64s[idx],
+                'index': idx.item()
+            })
+        return results
+    
+def get_batch_image_embeddings(images, model, processor, batch_size=2):
+    """
+    Generate embeddings for a batch of images.
+    """
+    dataloader = DataLoader(
+        images,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=lambda x: processor.process_images(x)
+    )
+    embeddings = []
+    for batch in tqdm(dataloader, desc="Processing images"):
+        with torch.no_grad():
+            batch = {k: v.to(model.device) for k, v in batch.items()}
+            batch_embeddings = model(**batch)
+            if model.device == "cuda":
+                batch_embeddings = batch_embeddings.float()
+            embeddings.extend(list(torch.unbind(batch_embeddings.cpu())))
+    return embeddings
+
 class ByaldiIndexer:
     @staticmethod
     def create_index(input_folder, index_path, index_name="pdfs_images", 
-                    model_name="vidore/colqwen2-v1.0"):
+                    model_name="vidore/colpali-v1.2"):
         os.makedirs(index_path, exist_ok=True)
         
         model = RAGMultiModalModel.from_pretrained(model_name, index_root=index_path)
@@ -158,6 +246,15 @@ class ByaldiIndexer:
         model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
         results = model.search(query_text, k=top_k)
         return [(r.metadata['filename'], r.score) for r in results]
+
+    @staticmethod
+    def query_by_image(query_img_path, index_path, index_name="pdfs_images", model_name="vidore/colpali-v1.2", top_k=5):
+        model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
+        colpali_model = model.model.model
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        processor = ColPaliProcessor.from_pretrained(model_name)
+        image_rag = ImageRAG(colpali_model, processor, device=device)
+        return image_rag.find_similar_images(Image.open(query_img_path), top_k=top_k)       
 
 def visualize_results(results, input_folder=None):
     plt.figure(figsize=(20, 10))
