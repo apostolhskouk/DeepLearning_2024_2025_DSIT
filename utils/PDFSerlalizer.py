@@ -22,6 +22,9 @@ import torch
 import re
 from datetime import datetime
 from docling.chunking import HybridChunker
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModel,AutoImageProcessor
+
 
 class DocumentHandler:
     """
@@ -315,13 +318,16 @@ class DocumentHandler:
         if verbose:
             duration = time.time() - start_time
             print(f"Text chunks extracted in {duration:.2f} seconds")
-
+    def mean_pooling(self,model_output, attention_mask):
+        token_embeddings = model_output[0]
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
     def extract_images(
         self,
         pdf_path,
         output_folder,
         verbose=False,
-        export_pages=True,
+        export_pages=False,
         export_figures=True,
         export_tables=True,
         do_ocr=True,
@@ -331,15 +337,18 @@ class DocumentHandler:
         generate_metadata=False,
         generate_annotated_pdf=False,
         generate_descriptions=False,
-        generate_table_markdown=False
+        generate_table_markdown=False,
+        relevant_passages = 0,
+        prompt_passages = True
     ):
         """
         Extracts images from PDF with captions, metadata, and annotated PDF support.
         """
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
+        if verbose:
+            print(f"Processing PDF: {pdf_path}...")
         if generate_descriptions:
-        
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if not hasattr(self, 'desc_model'):
                 self.desc_model = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -369,10 +378,52 @@ class DocumentHandler:
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
         )
         result = doc_converter.convert(pdf_path)
+        if generate_metadata and relevant_passages > 0:
+            doc = result.document
+            chunker = HybridChunker(tokenizer="BAAI/bge-small-en-v1.5")  # set tokenizer as needed
+            chunk_iter = chunker.chunk(doc)
+            chunk_list = list(chunk_iter)
+            chunks_texts = []
+            for chunk in chunk_list:
+                #if string 'font=' in chunk.text, then continue
+                if 'font=' in chunk.text:
+                    continue
+                chunks_texts.append(chunk.text)
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            tokenizer = AutoTokenizer.from_pretrained('nomic-ai/nomic-embed-text-v1.5')
+            text_model = AutoModel.from_pretrained(
+                'nomic-ai/nomic-embed-text-v1.5', 
+                trust_remote_code=True, 
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True
+            ).to(device)
+            text_model.eval()
+            
+            batch_size = 8
+            text_embeddings = []
+            for i in range(0, len(chunks_texts), batch_size):
+                batch = chunks_texts[i:i+batch_size]
+                encoded_input = tokenizer(batch, padding=True, truncation=True, return_tensors='pt').to(device)
+                
+                with torch.no_grad():
+                    model_output = text_model(**encoded_input)
+                
+                embeddings = self.mean_pooling(model_output, encoded_input['attention_mask'])
+                embeddings = F.layer_norm(embeddings, (embeddings.shape[1],))
+                embeddings = F.normalize(embeddings, p=2, dim=1)
+                text_embeddings.append(embeddings.cpu())  # Move to CPU to free GPU memory
 
-        if verbose:
-            print(f"Processing PDF: {pdf_path}...")
-
+            text_embeddings = torch.cat(text_embeddings)
+            text_embeddings = text_embeddings.to(device).to(torch.float16)
+            vision_processor = AutoImageProcessor.from_pretrained("nomic-ai/nomic-embed-vision-v1.5")
+            vision_model = AutoModel.from_pretrained(
+                "nomic-ai/nomic-embed-vision-v1.5",
+                trust_remote_code=True,
+                torch_dtype=torch.float16 if device.type == 'cuda' else torch.float32,
+                low_cpu_mem_usage=True
+            ).to(device).eval()
+            
+            
         # Process pages
         if export_pages:
             for page_no, page in result.document.pages.items():
@@ -420,21 +471,49 @@ class DocumentHandler:
                     bbox = prov.bbox.to_top_left_origin(result.document.pages[prov.page_no].size.height)
                     if generate_table_markdown:
                         table_markdown = element.export_to_markdown()
+                    if relevant_passages > 0:
+                        with torch.no_grad():
+                            inputs = vision_processor(Image.open(img_path), return_tensors="pt").to(device)
+                            img_emb = vision_model(**inputs).last_hidden_state
+                            img_embedding = F.normalize(img_emb[:, 0], p=2, dim=1)
+                        similarities = torch.matmul(text_embeddings, img_embedding.T).squeeze()
+                        topk_indices = torch.topk(similarities, relevant_passages).indices.tolist()
+                        relevant_texts = [chunks_texts[i] for i in topk_indices]
+                        
                     if generate_descriptions:
                         try:
-                            messages = [{
-                                "role": "user",
-                                "content": [
-                                    {"type": "image", "image": img_path},
-                                    {"type": "text", "text": """
-                                        Given this table from a scientific paper, provide a single technically precise sentence that:
-                                        1. States the type of visualization
-                                        2. Describes the main scientific concept or finding shown
-                                        3. Mentions key variables or metrics involved
-                                        Keep under 50 words with technical terms. Focus on core message.
-                                    """}
-                                ]
-                            }]
+                            if not prompt_passages:
+                                messages = [{
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "image", "image": img_path},
+                                        {"type": "text", "text": """
+                                            Given this table from a scientific paper, provide a single technically precise sentence that:
+                                            1. States the type of visualization
+                                            2. Describes the main scientific concept or finding shown
+                                            3. Mentions key variables or metrics involved
+                                            Keep under 50 words with technical terms. Focus on core message.
+                                        """}
+                                    ]
+                                }]
+                            else:
+                                passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
+                                messages = [{
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "image", "image": img_path},
+                                        {"type": "text", "text": f"""
+                                            Given this table from a scientific paper, provide a single technically precise sentence that:
+                                            1. States the type of visualization
+                                            2. Describes the main scientific concept or finding shown
+                                            3. Mentions key variables or metrics involved
+                                            Keep under 50 words with technical terms. Focus on core message.
+                                            
+                                            Here are also some relevant to the table passages from the paper to give you context:
+                                            {passage_text}
+                                        """}
+                                    ]
+                                }]
 
                             text = self.desc_processor.apply_chat_template(
                                 messages, tokenize=False, add_generation_prompt=True
@@ -469,7 +548,8 @@ class DocumentHandler:
                         "bbox": bbox.model_dump(),
                         "caption": table_caption or None,
                         "description": desc.strip() if generate_descriptions else None,
-                        "markdown": table_markdown if generate_table_markdown else None
+                        "markdown": table_markdown if generate_table_markdown else None,
+                        "relevant_passages": relevant_texts if relevant_passages > 0 else None
                     })
 
             # Figure processing
@@ -495,22 +575,49 @@ class DocumentHandler:
                 if generate_metadata:
                     prov = element.prov[0]
                     bbox = prov.bbox.to_top_left_origin(result.document.pages[prov.page_no].size.height)
+                    if relevant_passages > 0:
+                        with torch.no_grad():
+                            inputs = vision_processor(Image.open(img_path), return_tensors="pt").to(device)
+                            img_emb = vision_model(**inputs).last_hidden_state
+                            img_embedding = F.normalize(img_emb[:, 0], p=2, dim=1)
+                        similarities = torch.matmul(text_embeddings, img_embedding.T).squeeze()
+                        topk_indices = torch.topk(similarities, relevant_passages).indices.tolist()
+                        relevant_texts = [chunks_texts[i] for i in topk_indices]
+                        
                     if generate_descriptions:
                         try:
-                            messages = [{
-                                "role": "user",
-                                "content": [
-                                    {"type": "image", "image": img_path},
-                                    {"type": "text", "text": """
-                                        Given this figure from a scientific paper, provide a single technically precise sentence that:
-                                        1. States the type of visualization
-                                        2. Describes the main scientific concept or finding shown
-                                        3. Mentions key variables or metrics involved
-                                        Keep under 50 words with technical terms. Focus on core message.
-                                    """}
-                                ]
-                            }]
-
+                            if not prompt_passages:
+                                messages = [{
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "image", "image": img_path},
+                                        {"type": "text", "text": """
+                                            Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                            1. States the type of visualization
+                                            2. Describes the main scientific concept or finding shown
+                                            3. Mentions key variables or metrics involved
+                                            Keep under 50 words with technical terms. Focus on core message.
+                                        """}
+                                    ]
+                                }]
+                            else:
+                                passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
+                                messages = [{
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "image", "image": img_path},
+                                        {"type": "text", "text": f"""
+                                            Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                            1. States the type of visualization
+                                            2. Describes the main scientific concept or finding shown
+                                            3. Mentions key variables or metrics involved
+                                            Keep under 50 words with technical terms. Focus on core message.
+                                            
+                                            Here are also some relevant to the figure passages from the paper to give you context:
+                                            {passage_text}
+                                        """}
+                                    ]
+                                }]
                             text = self.desc_processor.apply_chat_template(
                                 messages, tokenize=False, add_generation_prompt=True
                             )
@@ -542,7 +649,8 @@ class DocumentHandler:
                         "page_no": prov.page_no,
                         "bbox": bbox.model_dump(),
                         "caption": figure_caption or None,
-                        "description": desc.strip() if generate_descriptions else None
+                        "description": desc.strip() if generate_descriptions else None,
+                        "relevant_passages": relevant_texts if relevant_passages > 0 else None
                     })
 
         # Generate metadata file
@@ -587,9 +695,9 @@ class DocumentHandler:
         }
 
 if __name__ == "__main__":
-    pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/test2.pdf"
-    output_dir = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/output"    
+    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/pdfs/CatSQL.pdf"
+    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
     
     doc_handler = DocumentHandler()
-    #doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True)
-    doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
+    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True,relevant_passages=2,prompt_passages=True)
+    #doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
