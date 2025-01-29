@@ -14,7 +14,6 @@ from byaldi.objects import Result
 import base64
 import io
 from tqdm import tqdm
-from PDFSerlalizer import DocumentHandler
 
 class ResNetIndexer:
     @staticmethod
@@ -227,7 +226,7 @@ def get_batch_image_embeddings(images, model, processor, batch_size=2):
 class ByaldiIndexer:
     @staticmethod
     def create_index(input_folder, index_path, index_name="pdfs_images", 
-                    model_name="vidore/colpali-v1.2"):
+                    model_name="vidore/colqwen2-v1.0"):
         os.makedirs(index_path, exist_ok=True)
         
         model = RAGMultiModalModel.from_pretrained(model_name, index_root=index_path)
@@ -248,12 +247,21 @@ class ByaldiIndexer:
         return [(r.metadata['filename'], r.score) for r in results]
 
     @staticmethod
-    def query_by_image(query_img_path, index_path, index_name="pdfs_images", model_name="vidore/colpali-v1.2", top_k=5):
+    def query_by_image(query_img_path, image_dir, index_path, index_name="pdfs_images", model_name="vidore/colqwen2-v1.0", top_k=5):
         model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
         colpali_model = model.model.model
         device = "cuda" if torch.cuda.is_available() else "cpu"
         processor = ColPaliProcessor.from_pretrained(model_name)
         image_rag = ImageRAG(colpali_model, processor, device=device)
+        extracted_images = [
+            Image.open(os.path.join(image_dir, file)) for file in os.listdir(image_dir)
+            if file.endswith(".png")
+        ]
+        # Generate embeddings for the extracted images
+        embeddings = get_batch_image_embeddings(extracted_images, colpali_model, processor, batch_size=2)
+        # Add images and embeddings to ImageRAG
+        image_rag.add_images_and_embeddings(extracted_images, embeddings)
+
         return image_rag.find_similar_images(Image.open(query_img_path), top_k=top_k)       
 
 def visualize_results(results, input_folder=None):
