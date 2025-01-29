@@ -295,15 +295,22 @@ class DocumentHandler:
         chunk_list = list(chunk_iter)
         fileName = "docling-chunks.txt"
         chunk_filename = os.path.join(output_folder, fileName)
+
+        with open(chunk_filename, "w", encoding="utf-8") as f:
+            f.write("")
+
         for chunk_ix, chunk in enumerate(chunk_list):
-            chunk_heading = chunk.meta.headings[0]
+            chunk_heading = None
+            if chunk.meta.headings is not None:
+                chunk_heading = chunk.meta.headings[0]
             chunk_text = chunk.text
 
             with open(chunk_filename, "a", encoding="utf-8") as f:
                 f.write(f"Chunk {chunk_ix + 1}:\n")
-                f.write(f"Heading: {chunk_heading}\n")
+                if chunk_heading:
+                    f.write(f"Heading: {chunk_heading}\n")
                 f.write(chunk_text)
-                f.write("\n\n")            
+                f.write("\n\n")
 
         if verbose:
             duration = time.time() - start_time
@@ -580,9 +587,9 @@ class DocumentHandler:
         }
 
 if __name__ == "__main__":
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/cs_ai_2024_pdfs/test2.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
+    pdf_path = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/cs_ai_2024_pdfs/test2.pdf"
+    output_dir = "/data/hdd1/users/kmparmp/DeepLearning_2024_2025_DSIT/utils/output"    
     
     doc_handler = DocumentHandler()
-    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True)
-    # doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
+    #doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True)
+    doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
