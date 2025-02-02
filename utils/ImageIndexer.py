@@ -16,28 +16,35 @@ import io
 from tqdm import tqdm
 
 class ResNetIndexer:
-    @staticmethod
-    def create_index(input_folder, index_path, model_name="microsoft/resnet-50", batch_size=16):
-        os.makedirs(index_path, exist_ok=True)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, index_path, model_name="microsoft/resnet-50"):
+        self.index_path = index_path
+        self.model_name = model_name
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        processor = AutoImageProcessor.from_pretrained(model_name)
-        model = ResNetModel.from_pretrained(model_name).to(device)
-        model.eval()
-        pooler = AdaptiveAvgPool2d((1, 1))
+        # Lazy-loaded components
+        self._model = None
+        self._processor = None
+        self._faiss_index = None
+        self._image_paths = None
+        self._pooler = AdaptiveAvgPool2d((1, 1))
+
+    def create_index(self, input_folder, batch_size=16):
+        """Create and save FAISS index from images"""
+        os.makedirs(self.index_path, exist_ok=True)
+        self._load_model()
         
         image_paths = []
         embeddings = []
         
-        for fname in os.listdir(input_folder):
+        for fname in tqdm(os.listdir(input_folder), desc="Indexing images"):
             if fname.endswith(".png"):
                 path = os.path.join(input_folder, fname)
                 try:
                     img = Image.open(path).convert("RGB")
-                    inputs = processor(images=img, return_tensors="pt").to(device)
+                    inputs = self._processor(images=img, return_tensors="pt").to(self.device)
                     with torch.no_grad():
-                        outputs = model(**inputs)
-                    embedding = pooler(outputs.last_hidden_state).squeeze()
+                        outputs = self._model(**inputs)
+                    embedding = self._pooler(outputs.last_hidden_state).squeeze()
                     embedding = torch.nn.functional.normalize(embedding, p=2, dim=0)
                     
                     embeddings.append(embedding.cpu().numpy())
@@ -46,50 +53,71 @@ class ResNetIndexer:
                     print(f"Skipped {fname}: {str(e)}")
         
         embeddings_np = np.array(embeddings).astype("float32")
-        np.save(os.path.join(index_path, "embeddings.npy"), embeddings_np)
-        np.save(os.path.join(index_path, "image_paths.npy"), np.array(image_paths))
+        self._save_index(embeddings_np, image_paths)
         
-        index = faiss.IndexFlatIP(embeddings_np.shape[1])
-        index.add(embeddings_np)
-        faiss.write_index(index, os.path.join(index_path, "faiss_index.bin"))
+        # Reset cached components
+        self._faiss_index = None
+        self._image_paths = None
 
-    @staticmethod
-    def query_by_image(query_path, index_path, top_k=5):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        processor = AutoImageProcessor.from_pretrained("microsoft/resnet-50")
-        model = ResNetModel.from_pretrained("microsoft/resnet-50").to(device)
-        model.eval()
-        pooler = AdaptiveAvgPool2d((1, 1))
-        
-        index = faiss.read_index(os.path.join(index_path, "faiss_index.bin"))
-        image_paths = np.load(os.path.join(index_path, "image_paths.npy"))
+    def query_by_image(self, query_path, top_k=5):
+        """Query index using an image"""
+        self._load_model()
+        self._load_index()
         
         img = Image.open(query_path).convert("RGB")
-        inputs = processor(images=img, return_tensors="pt").to(device)
+        inputs = self._processor(images=img, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            outputs = model(**inputs)
-        query_emb = pooler(outputs.last_hidden_state).squeeze()
+            outputs = self._model(**inputs)
+        query_emb = self._pooler(outputs.last_hidden_state).squeeze()
         query_emb = torch.nn.functional.normalize(query_emb, p=2, dim=0).cpu().numpy().astype("float32")
         
-        distances, indices = index.search(query_emb.reshape(1, -1), top_k)
-        return [(image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+        distances, indices = self._faiss_index.search(query_emb.reshape(1, -1), top_k)
+        return [(self._image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+
+    def _load_model(self):
+        """Lazy-load model and processor"""
+        if self._model is None:
+            self._processor = AutoImageProcessor.from_pretrained(self.model_name)
+            self._model = ResNetModel.from_pretrained(self.model_name).to(self.device)
+            self._model.eval()
+
+    def _load_index(self):
+        """Lazy-load FAISS index and paths"""
+        if self._faiss_index is None:
+            self._faiss_index = faiss.read_index(os.path.join(self.index_path, "faiss_index.bin"))
+            self._image_paths = np.load(os.path.join(self.index_path, "image_paths.npy"))
+
+    def _save_index(self, embeddings, image_paths):
+        """Save index components to disk"""
+        np.save(os.path.join(self.index_path, "embeddings.npy"), embeddings)
+        np.save(os.path.join(self.index_path, "image_paths.npy"), np.array(image_paths))
+        
+        index = faiss.IndexFlatIP(embeddings.shape[1])
+        index.add(embeddings)
+        faiss.write_index(index, os.path.join(self.index_path, "faiss_index.bin"))
 
 class CLIPIndexer:
-    @staticmethod
-    def create_index(input_folder, index_path, model_name="jinaai/jina-clip-v2", truncate_dim=1024, batch_size=4):
-        os.makedirs(index_path, exist_ok=True)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(self, index_path, model_name="jinaai/jina-clip-v2", truncate_dim=1024):
+        self.index_path = index_path
+        self.model_name = model_name
+        self.truncate_dim = truncate_dim
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(device)
-        model.eval()
+        # Lazy-loaded components
+        self._model = None
+        self._faiss_index = None
+        self._image_paths = None
+
+    def create_index(self, input_folder, batch_size=4):
+        """Create and save FAISS index from images"""
+        os.makedirs(self.index_path, exist_ok=True)
+        self._load_model()
         
         image_paths = []
         embeddings = []
-        
         paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith(".png")]
         
-        for i in range(0, len(paths), batch_size):
+        for i in tqdm(range(0, len(paths), batch_size), desc="Indexing images"):
             batch_paths = paths[i:i+batch_size]
             batch_imgs = []
             
@@ -102,186 +130,230 @@ class CLIPIndexer:
             
             if batch_imgs:
                 with torch.no_grad():
-                    emb = model.encode_image(batch_imgs, truncate_dim=truncate_dim)
-                embeddings.append(emb)
+                    # Jina CLIP returns numpy arrays directly
+                    emb = self._model.encode_image(batch_imgs, truncate_dim=self.truncate_dim)
+                embeddings.append(emb)  # Remove .cpu().numpy()
         
         embeddings_np = np.concatenate(embeddings).astype("float32")
-        np.save(os.path.join(index_path, "embeddings.npy"), embeddings_np)
-        np.save(os.path.join(index_path, "image_paths.npy"), np.array(image_paths))
+        self._save_index(embeddings_np, image_paths)
         
-        index = faiss.IndexFlatIP(embeddings_np.shape[1])
-        index.add(embeddings_np)
-        faiss.write_index(index, os.path.join(index_path, "faiss_index.bin"))
+        # Reset cached components
+        self._faiss_index = None
+        self._image_paths = None
 
-    @staticmethod
-    def query_by_image(query_path, index_path, top_k=5):
-        return CLIPIndexer._query(query_path, index_path, top_k, "image")
+    def query_by_image(self, query_path, top_k=5):
+        """Query index using an image"""
+        return self._query(query_path, top_k, "image")
 
-    @staticmethod
-    def query_by_text(query_text, index_path, top_k=5):
-        return CLIPIndexer._query(query_text, index_path, top_k, "text")
+    def query_by_text(self, query_text, top_k=5):
+        """Query index using text"""
+        return self._query(query_text, top_k, "text")
 
-    @staticmethod
-    def _query(query_input, index_path, top_k, input_type):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        model = AutoModel.from_pretrained("jinaai/jina-clip-v2", trust_remote_code=True).to(device)
-        model.eval()
-        
-        index = faiss.read_index(os.path.join(index_path, "faiss_index.bin"))
-        image_paths = np.load(os.path.join(index_path, "image_paths.npy"))
+    def _query(self, query_input, top_k, input_type):
+        self._load_model()
+        self._load_index()
         
         if input_type == "image":
             img = Image.open(query_input).convert("RGB")
             with torch.no_grad():
-                query_emb = model.encode_image([img])
+                query_emb = self._model.encode_image([img], truncate_dim=self.truncate_dim)
         else:
             with torch.no_grad():
-                query_emb = model.encode_text([query_input], task="retrieval.query")
+                query_emb = self._model.encode_text([query_input], task="retrieval.query")
         
-        distances, indices = index.search(query_emb.astype("float32"), top_k)
-        return [(image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+        distances, indices = self._faiss_index.search(query_emb.astype("float32"), top_k)
+        return [(self._image_paths[i], d) for i, d in zip(indices[0], distances[0])]
 
-from io import BytesIO
+    def _load_model(self):
+        """Lazy-load model"""
+        if self._model is None:
+            self._model = AutoModel.from_pretrained(self.model_name, trust_remote_code=True).to(self.device)
+            self._model.eval()
 
-def pil_image_to_bytes(img):
-    # Save the image to a BytesIO buffer
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+    def _load_index(self):
+        """Lazy-load FAISS index and paths"""
+        if self._faiss_index is None:
+            self._faiss_index = faiss.read_index(os.path.join(self.index_path, "faiss_index.bin"))
+            self._image_paths = np.load(os.path.join(self.index_path, "image_paths.npy"))
 
-class ImageRAG:
-    def __init__(self, model, processor, image_paths, device="cuda"):
-        self.model = model
-        self.processor = processor
-        self.device = device
-        self.image_paths = image_paths
-        self.embeddings = []
-        self.image_base64s = []
-
-    def _image_to_base64(self, image):
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return base64.b64encode(buffer.getvalue()).decode()
-
-    def _base64_to_image(self, base64_str):
-        image_data = base64.b64decode(base64_str)
-        return Image.open(io.BytesIO(image_data))
-
-    def add_images_and_embeddings(self, images, embeddings):
-        assert len(images) == len(embeddings)
-        self.embeddings = embeddings
-        for img in images:
-            self.image_base64s.append(self._image_to_base64(img))
-
-    def find_similar_images(self, query_image, top_k=5, batch_size=4):
-        # Process the query image
-        processed_query = self.processor.process_images([query_image])
-        processed_query = {k: v.to(self.device) for k, v in processed_query.items()}
+    def _save_index(self, embeddings, image_paths):
+        """Save index components to disk"""
+        np.save(os.path.join(self.index_path, "embeddings.npy"), embeddings)
+        np.save(os.path.join(self.index_path, "image_paths.npy"), np.array(image_paths))
         
-        with torch.no_grad():
-            query_embedding = self.model(**processed_query)
-            if self.device == "cuda":
-                query_embedding = query_embedding.float()  # Ensure query_embedding is float32
-            query_embedding = query_embedding.cpu()
+        index = faiss.IndexFlatIP(embeddings.shape[1])
+        index.add(embeddings)
+        faiss.write_index(index, os.path.join(self.index_path, "faiss_index.bin"))
 
-        # Cast the query embedding to bfloat16 to match indexed embeddings' dtype
-        query_embedding = query_embedding.to(torch.bfloat16)
 
-        # Score similarity between query and indexed images
-        scores = []
-        for i in range(0, len(self.embeddings), batch_size):
-            batch_embeddings = self.embeddings[i:i + batch_size]
-            batch_scores = []
-            for emb in batch_embeddings:
-                similarity = torch.matmul(query_embedding, emb.t())
-                max_similarity = similarity.max(dim=-1)[0]
-                score = max_similarity.sum()
-                batch_scores.append(score)
-            scores.extend(batch_scores)
-
-        scores = torch.tensor(scores)
-        top_k_values, top_k_indices = torch.topk(scores, min(top_k, len(scores)))
-
-        results = []
-        for similarity, idx in zip(top_k_values, top_k_indices):
-            results.append({
-                'similarity': similarity.item(),
-                'image_path': self.image_paths[idx],
-                'index': idx.item()
-            })
-        return results
-    
-def get_batch_image_embeddings(images, model, processor, batch_size=2):
-    """
-    Generate embeddings for a batch of images.
-    """
-    dataloader = DataLoader(
-        images,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=lambda x: processor.process_images(x)
-    )
-    embeddings = []
-    for batch in tqdm(dataloader, desc="Processing images"):
-        with torch.no_grad():
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            batch_embeddings = model(**batch)
-            if model.device == "cuda":
-                batch_embeddings = batch_embeddings.float()
-            embeddings.extend(list(torch.unbind(batch_embeddings.cpu())))
-    return embeddings
-
-class ByaldiIndexer:
-    @staticmethod
-    def create_index(input_folder, index_path, index_name="pdfs_images", 
-                    model_name="vidore/colqwen2-v1.0"):
-        os.makedirs(index_path, exist_ok=True)
+class ColpaliIndexer:
+    def __init__(self, index_path, index_name="pdfs_images", model_name="vidore/colqwen2-v1.0"):
+        self.index_path = Path(index_path)
+        self.index_name = index_name
+        self.model_name = model_name
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        model = RAGMultiModalModel.from_pretrained(model_name, index_root=index_path)
-        metadata = [{"filename": f} for f in os.listdir(input_folder) if f.endswith(".png")]
-        
-        model.index(
+        # Lazy-loaded components
+        self._model = None
+        self._processor = None
+        self._faiss_index = None
+        self._image_paths = None
+
+    def create_index(self, input_folder):
+        """Create and save both multimodal and FAISS indices"""
+        self._ensure_model_initialized()
+        self._create_multimodal_index(input_folder)
+        self._create_faiss_image_index(input_folder)
+
+    def query_by_text(self, query_text, top_k=5):
+        """Query using text input"""
+        self._load_multimodal_components()
+        print(f"Querying with: {query_text}")
+        results = self._model.search(query_text, k=top_k)
+        return [(r.metadata['filename'], r.score) for r in results]
+
+    def query_by_image(self, query_img_path, top_k=5):
+        """Query using image input"""
+        self._load_faiss_components()
+        query_embedding = self._get_query_embedding(query_img_path)
+        distances, indices = self._faiss_index.search(query_embedding, top_k)
+        return [(self._image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+
+    def _ensure_model_initialized(self):
+        """Initialize core model components once"""
+        if self._model is None:
+            self._model = RAGMultiModalModel.from_pretrained(
+                self.model_name, 
+                index_root=self.index_path
+            )
+            self._processor = ColQwen2Processor.from_pretrained(self.model_name)
+            self._model.model.model.to(self._device)
+
+    def _create_multimodal_index(self, input_folder):
+        """Create the multimodal RAG index"""
+        metadata = [{
+            "filename": os.path.abspath(os.path.join(input_folder, f))
+        } for f in os.listdir(input_folder) if f.endswith(".png")]
+        torch.cuda.empty_cache()
+        self._model.index(
             input_path=Path(input_folder),
-            index_name=index_name,
+            index_name=self.index_name,
             store_collection_with_index=False,
             metadata=metadata,
             overwrite=True
         )
+        torch.cuda.empty_cache()
 
-    @staticmethod
-    def query_by_text(query_text, index_path, index_name="pdfs_images", top_k=5):
-        model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
-        results = model.search(query_text, k=top_k)
-        return [(r.metadata['filename'], r.score) for r in results]
+    def _create_faiss_image_index(self, input_folder):
+        """Create FAISS index for image embeddings"""
+        image_paths, images = self._load_images(input_folder)
+        embeddings = self._generate_embeddings(images)
+        self._save_faiss_index(embeddings, image_paths)
 
-    @staticmethod
-    def query_by_image(query_img_path, image_dir, index_path, index_name="pdfs_images", model_name="vidore/colqwen2-v1.0", top_k=5):
-        model = RAGMultiModalModel.from_index(index_path=index_name, index_root=index_path)
-        colpali_model = model.model.model
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        processor = ColQwen2Processor.from_pretrained(model_name)
-        image_paths = [
-            os.path.join(image_dir, file) for file in os.listdir(image_dir)
-            if file.endswith(".png")
-        ]
-        extracted_images = [
-            Image.open(os.path.join(image_dir, file)) for file in os.listdir(image_dir)
-            if file.endswith(".png")
-        ]
-        image_rag = ImageRAG(colpali_model, processor, image_paths, device=device)
-        # Generate embeddings for the extracted images
-        embeddings = get_batch_image_embeddings(extracted_images, colpali_model, processor, batch_size=2)
-        # Add images and embeddings to ImageRAG
-        image_rag.add_images_and_embeddings(extracted_images, embeddings)
-        results = image_rag.find_similar_images(Image.open(query_img_path), top_k=top_k)
-        # Convert results to the desired format with np.str_ and np.float32
-        formatted_results = [
-            (np.str_(result['image_path']), np.float32(result['similarity'])) for result in results
-        ]
+    def _load_images(self, input_folder):
+        """Load and validate images from directory"""
+        image_paths = []
+        images = []
+        valid_extensions = {".png", ".jpg", ".jpeg"}
         
-        return formatted_results
+        for f in os.listdir(input_folder):
+            file_ext = os.path.splitext(f)[1].lower()
+            if file_ext in valid_extensions:
+                path = os.path.join(input_folder, f)
+                try:
+                    images.append(Image.open(path).convert("RGB"))
+                    image_paths.append(path)
+                except Exception as e:
+                    print(f"Skipped {path}: {str(e)}")
+        return image_paths, images
+
+    def _generate_embeddings(self, images, batch_size=1):
+        """Generate image embeddings using the model"""
+        dataloader = DataLoader(
+            images,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=lambda x: self._processor.process_images(x)
+        )
+        
+        embeddings = []
+        for batch in tqdm(dataloader, desc="Generating embeddings"):
+            with torch.no_grad():
+                batch = {k: v.to(self._device) for k, v in batch.items()}
+                outputs = self._model.model.model(**batch)
+                
+                # Modified: Handle different output formats
+                if isinstance(outputs, torch.Tensor):
+                    emb_tensor = outputs
+                elif hasattr(outputs, 'last_hidden_state'):
+                    emb_tensor = outputs.last_hidden_state
+                else:
+                    raise ValueError("Unsupported model output format")
+                
+                # Handle sequence dimension if present
+                if emb_tensor.dim() == 3:
+                    emb_tensor = emb_tensor.mean(dim=1)  # Average pooling
+                    
+                batch_emb = emb_tensor.float().cpu().numpy().astype("float32")
+                
+                if embeddings and batch_emb.shape[1] != embeddings[0].shape[1]:
+                    raise ValueError("Embedding dimension mismatch")
+                
+                embeddings.append(batch_emb)
+                del batch, outputs
+                torch.cuda.empty_cache()
+                
+        return np.concatenate(embeddings)
+    def _save_faiss_index(self, embeddings, image_paths):
+        """Save FAISS index and image paths"""
+        index = faiss.IndexFlatIP(embeddings.shape[1])
+        index.add(embeddings)
+        
+        faiss.write_index(index, os.path.join(str(self.index_path), "image_index.faiss"))
+
+        np.save(self.index_path/"image_paths.npy", np.array(image_paths))
+
+    def _load_multimodal_components(self):
+        """Lazy-load RAG model components"""
+        if self._model is None:
+            self._model = RAGMultiModalModel.from_index(
+                index_path=self.index_name,
+                index_root=self.index_path
+            )
+            self._model.model.model.to(self._device)
+
+    def _load_faiss_components(self):
+        """Lazy-load FAISS index components"""
+        if self._faiss_index is None:
+            self._faiss_index = faiss.read_index(os.path.join(str(self.index_path), "image_index.faiss"))
+            self._image_paths = np.load(self.index_path/"image_paths.npy")
+
+    def _get_query_embedding(self, query_img_path):
+        """Generate embedding for query image"""
+        # Ensure model AND processor are initialized
+        self._ensure_model_initialized()  # <-- Add this line
+        
+        query_img = Image.open(query_img_path).convert("RGB")
+        processed = self._processor.process_images([query_img])
+        processed = {k: v.to(self._device) for k, v in processed.items()}
+
+        with torch.no_grad():
+            output = self._model.model.model(**processed)
+            
+            # Handle different output formats
+            if isinstance(output, torch.Tensor):
+                emb_tensor = output
+            elif hasattr(output, 'last_hidden_state'):
+                emb_tensor = output.last_hidden_state
+            else:
+                raise ValueError("Unsupported model output format")
+            
+            # Handle sequence dimension
+            if emb_tensor.dim() == 3:
+                emb_tensor = emb_tensor.mean(dim=1)
+                
+            return emb_tensor.float().cpu().numpy().astype("float32")
+
     
 def visualize_results(results, input_folder=None):
     plt.figure(figsize=(20, 10))
