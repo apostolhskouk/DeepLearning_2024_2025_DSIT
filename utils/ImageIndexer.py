@@ -208,7 +208,6 @@ class ColpaliIndexer:
     def query_by_text(self, query_text, top_k=5):
         """Query using text input"""
         self._load_multimodal_components()
-        print(f"Querying with: {query_text}")
         results = self._model.search(query_text, k=top_k)
         return [(r.metadata['filename'], r.score) for r in results]
 
