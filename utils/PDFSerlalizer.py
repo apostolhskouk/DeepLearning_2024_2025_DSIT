@@ -24,7 +24,8 @@ from datetime import datetime
 from docling.chunking import HybridChunker
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel,AutoImageProcessor
-
+from janus.models import MultiModalityCausalLM, VLChatProcessor
+from transformers import AutoModelForCausalLM
 
 class DocumentHandler:
     """
@@ -337,6 +338,7 @@ class DocumentHandler:
         generate_metadata=False,
         generate_annotated_pdf=False,
         generate_descriptions=False,
+        description_model = "qwen",
         generate_table_markdown=False,
         relevant_passages = 0,
         prompt_passages = True
@@ -350,15 +352,26 @@ class DocumentHandler:
             print(f"Processing PDF: {pdf_path}...")
         if generate_descriptions:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            if not hasattr(self, 'desc_model'):
-                self.desc_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    "Qwen/Qwen2-VL-2B-Instruct",
-                    torch_dtype=torch.bfloat16,
-                    attn_implementation="flash_attention_2",
-                    device_map="auto",
-                ).to(device)
-                self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
-    
+            if description_model == "qwen":
+                if not hasattr(self, 'desc_model'):
+                    self.desc_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                        "Qwen/Qwen2-VL-2B-Instruct",
+                        torch_dtype=torch.bfloat16,
+                        attn_implementation="flash_attention_2",
+                        device_map="auto",
+                    ).to(device)
+                    self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct",use_fast=True)
+            elif description_model == "deepseek":
+                if not hasattr(self, 'desc_model'):
+                    
+                    self.desc_model = AutoModelForCausalLM.from_pretrained(
+                        "deepseek-ai/Janus-Pro-1B",
+                        trust_remote_code=True,
+                        torch_dtype=torch.bfloat16,
+                        device_map="auto"
+                    ).to(device).eval()
+                    self.desc_processor = VLChatProcessor.from_pretrained("deepseek-ai/Janus-Pro-1B")
+                    self.desc_tokenizer = self.desc_processor.tokenizer
         metadata = []
         pdf_name = Path(pdf_path).stem
         annotated_pdf_path = os.path.join(output_folder, f"{pdf_name}-annotated.pdf") if generate_annotated_pdf else None
@@ -390,7 +403,7 @@ class DocumentHandler:
                     continue
                 chunks_texts.append(chunk.text)
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            tokenizer = AutoTokenizer.from_pretrained('nomic-ai/nomic-embed-text-v1.5')
+            tokenizer = AutoTokenizer.from_pretrained('nomic-ai/nomic-embed-text-v1.5',legacy=False)
             text_model = AutoModel.from_pretrained(
                 'nomic-ai/nomic-embed-text-v1.5', 
                 trust_remote_code=True, 
@@ -481,66 +494,111 @@ class DocumentHandler:
                         relevant_texts = [chunks_texts[i] for i in topk_indices]
                         
                     if generate_descriptions:
-                        try:
-                            if not prompt_passages:
-                                messages = [{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "image", "image": img_path},
-                                        {"type": "text", "text": """
-                                            Given this table from a scientific paper, provide a single technically precise sentence that:
-                                            1. States the type of visualization
-                                            2. Describes the main scientific concept or finding shown
-                                            3. Mentions key variables or metrics involved
-                                            Keep under 50 words with technical terms. Focus on core message.
-                                        """}
-                                    ]
-                                }]
-                            else:
-                                passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
-                                messages = [{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "image", "image": img_path},
-                                        {"type": "text", "text": f"""
-                                            Given this table from a scientific paper, provide a single technically precise sentence that:
-                                            1. States the type of visualization
-                                            2. Describes the main scientific concept or finding shown
-                                            3. Mentions key variables or metrics involved
-                                            Keep under 50 words with technical terms. Focus on core message.
-                                            
-                                            Here are also some relevant to the table passages from the paper to give you context:
-                                            {passage_text}
-                                        """}
-                                    ]
-                                }]
+                        if description_model == "qwen":
+                            try:
+                                if not prompt_passages:
+                                    messages = [{
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "image", "image": img_path},
+                                            {"type": "text", "text": """
+                                                Given this table from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.
+                                            """}
+                                        ]
+                                    }]
+                                else:
+                                    passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
+                                    messages = [{
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "image", "image": img_path},
+                                            {"type": "text", "text": f"""
+                                                Given this table from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.
+                                
+                                                Here are also some relevant to the table passages from the paper to give you context:
+                                                {passage_text}
+                                            """}
+                                        ]
+                                    }]
 
-                            text = self.desc_processor.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
-                            )
-                            image_inputs, video_inputs = process_vision_info(messages)
+                                text = self.desc_processor.apply_chat_template(
+                                    messages, tokenize=False, add_generation_prompt=True
+                                )
+                                image_inputs, video_inputs = process_vision_info(messages)
 
-                            inputs = self.desc_processor(
-                                text=[text],
-                                images=image_inputs,
-                                videos=video_inputs,
-                                padding=True,
-                                return_tensors="pt",
-                            ).to(device)
+                                inputs = self.desc_processor(
+                                    text=[text],
+                                    images=image_inputs,
+                                    videos=video_inputs,
+                                    padding=True,
+                                    return_tensors="pt",
+                                ).to(device)
 
-                            generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
-                            generated_ids_trimmed = [
-                                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                                generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
+                                generated_ids_trimmed = [
+                                    out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                                ]
+                                desc = self.desc_processor.batch_decode(
+                                    generated_ids_trimmed, 
+                                    skip_special_tokens=True, 
+                                    clean_up_tokenization_spaces=False
+                                )[0]
+                                
+                            except Exception as e:
+                                desc = "Description generation failed"
+                        elif description_model == "deepseek":
+                            conversation = [
+                                {
+                                    "role": "<|User|>",
+                                    "content": f"""<image_placeholder>\n Given this table from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.""",
+                                    "images": [img_path]
+                                },
+                                {"role": "<|Assistant|>", "content": ""}
                             ]
-                            desc = self.desc_processor.batch_decode(
-                                generated_ids_trimmed, 
-                                skip_special_tokens=True, 
-                                clean_up_tokenization_spaces=False
-                            )[0]
                             
-                        except Exception as e:
-                            desc = "Description generation failed"
-                    
+                            # Process inputs
+                            pil_images = [Image.open(img_path)]
+                            prepare_inputs = self.desc_processor(
+                                conversations=conversation,
+                                images=pil_images,
+                                force_batchify=True
+                            ).to(device)
+                            
+                            # Generate description
+                            try:
+                                inputs_embeds = self.desc_model.prepare_inputs_embeds(**prepare_inputs)
+                                generated_ids = self.desc_model.language_model.generate(
+                                    inputs_embeds=inputs_embeds,
+                                    attention_mask=prepare_inputs.attention_mask,
+                                    pad_token_id=self.desc_tokenizer.eos_token_id,
+                                    bos_token_id=self.desc_tokenizer.bos_token_id,
+                                    eos_token_id=self.desc_tokenizer.eos_token_id,
+                                    max_new_tokens=128,
+                                    do_sample=False,
+                                    use_cache=True
+                                )
+                                desc = self.desc_tokenizer.decode(generated_ids[0].cpu().tolist(), 
+                                                                skip_special_tokens=True)
+                                # Remove any remaining template tags
+                                desc = desc.replace("<|User|>", "").replace("<|Assistant|>", "").strip()
+                            except Exception as e:
+                                desc = "Description generation failed"
+                                            
                     metadata.append({
                         "filename": os.path.basename(img_path),
                         "type": "table",
@@ -585,64 +643,110 @@ class DocumentHandler:
                         relevant_texts = [chunks_texts[i] for i in topk_indices]
                         
                     if generate_descriptions:
-                        try:
-                            if not prompt_passages:
-                                messages = [{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "image", "image": img_path},
-                                        {"type": "text", "text": """
-                                            Given this figure from a scientific paper, provide a single technically precise sentence that:
-                                            1. States the type of visualization
-                                            2. Describes the main scientific concept or finding shown
-                                            3. Mentions key variables or metrics involved
-                                            Keep under 50 words with technical terms. Focus on core message.
-                                        """}
-                                    ]
-                                }]
-                            else:
-                                passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
-                                messages = [{
-                                    "role": "user",
-                                    "content": [
-                                        {"type": "image", "image": img_path},
-                                        {"type": "text", "text": f"""
-                                            Given this figure from a scientific paper, provide a single technically precise sentence that:
-                                            1. States the type of visualization
-                                            2. Describes the main scientific concept or finding shown
-                                            3. Mentions key variables or metrics involved
-                                            Keep under 50 words with technical terms. Focus on core message.
-                                            
-                                            Here are also some relevant to the figure passages from the paper to give you context:
-                                            {passage_text}
-                                        """}
-                                    ]
-                                }]
-                            text = self.desc_processor.apply_chat_template(
-                                messages, tokenize=False, add_generation_prompt=True
-                            )
-                            image_inputs, video_inputs = process_vision_info(messages)
+                        if description_model == "qwen":
+                            try:
+                                if not prompt_passages:
+                                    messages = [{
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "image", "image": img_path},
+                                            {"type": "text", "text": """
+                                                Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.
+                                            """}
+                                        ]
+                                    }]
+                                else:
+                                    passage_text = "\n\n".join([f"- {p}" for p in relevant_texts]) 
+                                    messages = [{
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "image", "image": img_path},
+                                            {"type": "text", "text": f"""
+                                                Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.
+                                                
+                                                Here are also some relevant to the figure passages from the paper to give you context:
+                                                {passage_text}
+                                            """}
+                                        ]
+                                    }]
+                                text = self.desc_processor.apply_chat_template(
+                                    messages, tokenize=False, add_generation_prompt=True
+                                )
+                                image_inputs, video_inputs = process_vision_info(messages)
 
-                            inputs = self.desc_processor(
-                                text=[text],
-                                images=image_inputs,
-                                videos=video_inputs,
-                                padding=True,
-                                return_tensors="pt",
-                            ).to(device)
+                                inputs = self.desc_processor(
+                                    text=[text],
+                                    images=image_inputs,
+                                    videos=video_inputs,
+                                    padding=True,
+                                    return_tensors="pt",
+                                ).to(device)
 
-                            generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
-                            generated_ids_trimmed = [
-                                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                                generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
+                                generated_ids_trimmed = [
+                                    out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
+                                ]
+                                desc = self.desc_processor.batch_decode(
+                                    generated_ids_trimmed, 
+                                    skip_special_tokens=True, 
+                                    clean_up_tokenization_spaces=False
+                                )[0]
+                                
+                            except Exception as e:
+                                desc = "Description generation failed"
+                        elif description_model == "deepseek":
+                            conversation = [
+                                {
+                                    "role": "<|User|>",
+                                    "content": f"""<image_placeholder>\n 
+                                                Given this figure from a scientific paper, provide a single technically precise sentence that:
+                                                1. States the type of visualization
+                                                2. Describes the main scientific concept or finding shown
+                                                3. Mentions key variables or metrics involved
+                                                4. This sentence will be used for text-to-image retrieval
+                                                Keep under 50 words with technical terms. Focus on core message.""",
+                                    "images": [img_path]
+                                },
+                                {"role": "<|Assistant|>", "content": ""}
                             ]
-                            desc = self.desc_processor.batch_decode(
-                                generated_ids_trimmed, 
-                                skip_special_tokens=True, 
-                                clean_up_tokenization_spaces=False
-                            )[0]
                             
-                        except Exception as e:
-                            desc = "Description generation failed"
+                            # Process inputs
+                            pil_images = [Image.open(img_path)]
+                            prepare_inputs = self.desc_processor(
+                                conversations=conversation,
+                                images=pil_images,
+                                force_batchify=True
+                            ).to(device)
+                            
+                            # Generate description
+                            try:
+                                inputs_embeds = self.desc_model.prepare_inputs_embeds(**prepare_inputs)
+                                generated_ids = self.desc_model.language_model.generate(
+                                    inputs_embeds=inputs_embeds,
+                                    attention_mask=prepare_inputs.attention_mask,
+                                    pad_token_id=self.desc_tokenizer.eos_token_id,
+                                    bos_token_id=self.desc_tokenizer.bos_token_id,
+                                    eos_token_id=self.desc_tokenizer.eos_token_id,
+                                    max_new_tokens=128,
+                                    do_sample=False,
+                                    use_cache=True
+                                )
+                                desc = self.desc_tokenizer.decode(generated_ids[0].cpu().tolist(), 
+                                                                skip_special_tokens=True)
+                                # Remove any remaining template tags
+                                desc = desc.replace("<|User|>", "").replace("<|Assistant|>", "").strip()
+                            except Exception as e:
+                                desc = "Description generation failed"
                     metadata.append({
                         "filename": os.path.basename(img_path),
                         "type": "picture",
@@ -695,9 +799,8 @@ class DocumentHandler:
         }
 
 if __name__ == "__main__":
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/pdfs/CatSQL.pdf"
+    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/test.pdf"
     output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
     
     doc_handler = DocumentHandler()
-    doc_handler.extract_images(pdf_path,output_dir,verbose=True,export_pages=False,export_figures=True,export_tables=True,do_ocr=True,do_table_structure=True,add_caption=True,filter_irrelevant=True,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,generate_table_markdown=True,relevant_passages=2,prompt_passages=True)
-    #doc_handler.extract_chunks(pdf_path,output_dir,verbose=True)
+    doc_handler.extract_images(pdf_path,output_dir,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,description_model="deepseek",verbose=True)
