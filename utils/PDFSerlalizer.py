@@ -269,11 +269,40 @@ class DocumentHandler:
         return False
 
     def _is_reference_table(self, ocr_result):
-        citation_pattern = re.compile(r'\[\d+\]')
-        citation_count = sum(1 for _, text, _ in ocr_result if citation_pattern.search(text))
-
-        # Heuristic: If there are multiple citations, it's likely a reference table
-        return citation_count > 5
+        # Pattern to match lines starting with [number]
+        citation_pattern = re.compile(r'^\[\d+\]')
+        # Pattern to match common reference-related keywords
+        keyword_pattern = re.compile(
+            r'(?:Journal|vol\.|pp\.|doi|ISBN|http|https|ed\.|conference|proc\.|trans\.|pages?|volume|issue|press|year|article|book)',
+            re.IGNORECASE
+        )
+        
+        citation_keyword_lines = 0
+        sequential_count = 0
+        previous_num = 0
+        
+        for _, text, _ in ocr_result:
+            # Check if the line starts with a citation
+            citation_match = citation_pattern.match(text)
+            if citation_match:
+                # Extract citation number
+                current_num = int(re.search(r'\d+', citation_match.group()).group())
+                # Check for sequential order (optional)
+                if current_num == previous_num + 1:
+                    sequential_count += 1
+                previous_num = current_num
+                
+                # Check for keywords in the same line
+                if keyword_pattern.search(text):
+                    citation_keyword_lines += 1
+        
+        # Heuristic 1: Minimum lines with citations and keywords
+        keyword_check = citation_keyword_lines >= 3
+        # Heuristic 2: Sequential citation numbers (optional)
+        sequential_check = sequential_count >= 2  # At least 2 sequential numbers
+        
+        # Combine heuristics (adjust based on testing)
+        return keyword_check or sequential_check
 
     def extract_chunks(self, pdf_path, output_folder, verbose=False, mode="fast"):
         """
@@ -798,9 +827,4 @@ class DocumentHandler:
             "descriptions_generated": generate_descriptions
         }
 
-if __name__ == "__main__":
-    pdf_path = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/test.pdf"
-    output_dir = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/test"    
-    
-    doc_handler = DocumentHandler()
-    doc_handler.extract_images(pdf_path,output_dir,generate_metadata=True,generate_annotated_pdf=True,generate_descriptions=True,description_model="deepseek",verbose=True)
+
