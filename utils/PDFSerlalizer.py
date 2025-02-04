@@ -388,7 +388,7 @@ class DocumentHandler:
                         torch_dtype=torch.bfloat16,
                         attn_implementation="flash_attention_2",
                         device_map="auto",
-                    ).to(device)
+                    ).eval()
                     self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct",use_fast=True)
             elif description_model == "deepseek":
                 if not hasattr(self, 'desc_model'):
@@ -398,7 +398,7 @@ class DocumentHandler:
                         trust_remote_code=True,
                         torch_dtype=torch.bfloat16,
                         device_map="auto"
-                    ).to(device).eval()
+                    ).eval()
                     self.desc_processor = VLChatProcessor.from_pretrained("deepseek-ai/Janus-Pro-1B")
                     self.desc_tokenizer = self.desc_processor.tokenizer
         metadata = []
@@ -535,7 +535,6 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.
                                             """}
                                         ]
@@ -551,7 +550,6 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.
                                 
                                                 Here are also some relevant to the table passages from the paper to give you context:
@@ -559,7 +557,7 @@ class DocumentHandler:
                                             """}
                                         ]
                                     }]
-
+                                
                                 text = self.desc_processor.apply_chat_template(
                                     messages, tokenize=False, add_generation_prompt=True
                                 )
@@ -593,7 +591,6 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.""",
                                     "images": [img_path]
                                 },
@@ -684,7 +681,6 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.
                                             """}
                                         ]
@@ -700,7 +696,6 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.
                                                 
                                                 Here are also some relevant to the figure passages from the paper to give you context:
@@ -708,6 +703,7 @@ class DocumentHandler:
                                             """}
                                         ]
                                     }]
+                                
                                 text = self.desc_processor.apply_chat_template(
                                     messages, tokenize=False, add_generation_prompt=True
                                 )
@@ -742,13 +738,15 @@ class DocumentHandler:
                                                 1. States the type of visualization
                                                 2. Describes the main scientific concept or finding shown
                                                 3. Mentions key variables or metrics involved
-                                                4. This sentence will be used for text-to-image retrieval
                                                 Keep under 50 words with technical terms. Focus on core message.""",
                                     "images": [img_path]
                                 },
                                 {"role": "<|Assistant|>", "content": ""}
                             ]
                             
+                            
+                            # Process inputs
+                                                        
                             # Process inputs
                             pil_images = [Image.open(img_path)]
                             prepare_inputs = self.desc_processor(

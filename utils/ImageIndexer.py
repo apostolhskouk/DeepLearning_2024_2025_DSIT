@@ -150,6 +150,7 @@ class CLIPIndexer:
         return self._query(query_text, top_k, "text")
 
     def _query(self, query_input, top_k, input_type):
+        torch.cuda.empty_cache()
         self._load_model()
         self._load_index()
         
@@ -193,7 +194,7 @@ class ColpaliIndexer:
         self.model_name = model_name
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Lazy-loaded components
+        # Initialize all components to None
         self._model = None
         self._processor = None
         self._faiss_index = None
@@ -206,27 +207,57 @@ class ColpaliIndexer:
         self._create_faiss_image_index(input_folder)
 
     def query_by_text(self, query_text, top_k=5):
-        """Query using text input"""
+        """Memory-optimized text query"""
         self._load_multimodal_components()
-        results = self._model.search(query_text, k=top_k)
-        return [(r.metadata['filename'], r.score) for r in results]
+        try:
+            with torch.no_grad(), torch.amp.autocast("cuda"):
+                print(f"Querying with text: {query_text}")
+                results = self._model.search(query_text, k=top_k)
+            return [(r.metadata['filename'], r.score) for r in results]
+        except Exception as e:
+            # Add additional error logging here if needed
+            raise RuntimeError(f"Text query failed: {str(e)}") from e
 
     def query_by_image(self, query_img_path, top_k=5):
-        """Query using image input"""
+        """Query using image input with enhanced error handling"""
+        torch.cuda.empty_cache()
         self._load_faiss_components()
-        query_embedding = self._get_query_embedding(query_img_path)
-        distances, indices = self._faiss_index.search(query_embedding, top_k)
-        return [(self._image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+        torch.cuda.empty_cache()
+        try:
+            query_embedding = self._get_query_embedding(query_img_path)
+            distances, indices = self._faiss_index.search(query_embedding, top_k)
+            return [(self._image_paths[i], d) for i, d in zip(indices[0], distances[0])]
+        except Exception as e:
+            # Add additional error logging here if needed
+            raise RuntimeError(f"Image query failed: {str(e)}") from e
+        finally:
+            # Clean up resources
+            if 'query_embedding' in locals():
+                del query_embedding
+            if 'distances' in locals():
+                del distances
+            if 'indices' in locals():
+                del indices
+            torch.cuda.empty_cache()
+
+    def _ensure_processor_initialized(self):
+        """Ensure processor is initialized independently"""
+        if self._processor is None:
+            self._processor = ColQwen2Processor.from_pretrained(self.model_name)
 
     def _ensure_model_initialized(self):
-        """Initialize core model components once"""
+        """Initialize both model and processor with proper checks"""
         if self._model is None:
+            torch.cuda.empty_cache()
             self._model = RAGMultiModalModel.from_pretrained(
                 self.model_name, 
                 index_root=self.index_path
             )
-            self._processor = ColQwen2Processor.from_pretrained(self.model_name)
+            # Ensure processor is initialized with model
+            self._ensure_processor_initialized()
             self._model.model.model.to(self._device)
+            self._model.model.model.gradient_checkpointing_enable()
+            self._model.model.model.config.use_cache = False
 
     def _create_multimodal_index(self, input_folder):
         """Create the multimodal RAG index"""
@@ -303,6 +334,8 @@ class ColpaliIndexer:
                 torch.cuda.empty_cache()
                 
         return np.concatenate(embeddings)
+    
+    
     def _save_faiss_index(self, embeddings, image_paths):
         """Save FAISS index and image paths"""
         index = faiss.IndexFlatIP(embeddings.shape[1])
@@ -313,12 +346,15 @@ class ColpaliIndexer:
         np.save(self.index_path/"image_paths.npy", np.array(image_paths))
 
     def _load_multimodal_components(self):
-        """Lazy-load RAG model components"""
+        """Load model components with processor initialization"""
+        print(f"Loading from path {self.index_path} with index {self.index_name}")
         if self._model is None:
             self._model = RAGMultiModalModel.from_index(
                 index_path=self.index_name,
                 index_root=self.index_path
             )
+            # Initialize processor when loading from index
+            self._ensure_processor_initialized()
             self._model.model.model.to(self._device)
 
     def _load_faiss_components(self):
@@ -328,30 +364,46 @@ class ColpaliIndexer:
             self._image_paths = np.load(self.index_path/"image_paths.npy")
 
     def _get_query_embedding(self, query_img_path):
-        """Generate embedding for query image"""
-        # Ensure model AND processor are initialized
-        self._ensure_model_initialized()  # <-- Add this line
-        
-        query_img = Image.open(query_img_path).convert("RGB")
-        processed = self._processor.process_images([query_img])
-        processed = {k: v.to(self._device) for k, v in processed.items()}
+        """Generate embedding for query image with proper error handling"""
+        query_embedding = None  # Initialize with default value
+        self._ensure_processor_initialized()
+        self._ensure_model_initialized()
+        try:
+            
+            query_img = Image.open(query_img_path).convert("RGB")
+            processed = self._processor.process_images([query_img])
+            processed = {k: v.to(self._device) for k, v in processed.items()}
 
-        with torch.no_grad():
-            output = self._model.model.model(**processed)
-            
-            # Handle different output formats
-            if isinstance(output, torch.Tensor):
-                emb_tensor = output
-            elif hasattr(output, 'last_hidden_state'):
-                emb_tensor = output.last_hidden_state
-            else:
-                raise ValueError("Unsupported model output format")
-            
-            # Handle sequence dimension
-            if emb_tensor.dim() == 3:
-                emb_tensor = emb_tensor.mean(dim=1)
+            with torch.no_grad():
+                output = self._model.model.model(**processed)
                 
-            return emb_tensor.float().cpu().numpy().astype("float32")
+                # Handle different output formats
+                if isinstance(output, torch.Tensor):
+                    emb_tensor = output
+                elif hasattr(output, 'last_hidden_state'):
+                    emb_tensor = output.last_hidden_state
+                else:
+                    raise ValueError("Unsupported model output format")
+                
+                # Handle sequence dimension
+                if emb_tensor.dim() == 3:
+                    emb_tensor = emb_tensor.mean(dim=1)
+                    
+                query_embedding = emb_tensor.float().cpu().numpy().astype("float32")
+                
+        except Exception as e:
+            # Clean up resources before re-raising
+            torch.cuda.empty_cache()
+            if 'query_img' in locals():
+                del query_img
+            if 'processed' in locals():
+                del processed
+            raise RuntimeError(f"Failed to generate query embedding: {str(e)}") from e
+            
+        if query_embedding is None:
+            raise RuntimeError("Failed to generate query embedding - unknown error")
+            
+        return query_embedding
 
     
 def visualize_results(results, input_folder=None):
