@@ -16,7 +16,7 @@ from textwrap import wrap
 import easyocr
 import re
 import tempfile
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 import torch
 import re
@@ -370,7 +370,7 @@ class DocumentHandler:
         description_model = "qwen",
         generate_table_markdown=False,
         relevant_passages = 0,
-        prompt_passages = True
+        prompt_passages = False
     ):
         """
         Extracts images from PDF with captions, metadata, and annotated PDF support.
@@ -382,17 +382,15 @@ class DocumentHandler:
         if generate_descriptions:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if description_model == "qwen":
-                if not hasattr(self, 'desc_model'):
-                    self.desc_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                        "Qwen/Qwen2-VL-2B-Instruct",
-                        torch_dtype=torch.bfloat16,
-                        attn_implementation="flash_attention_2",
-                        device_map="auto",
-                    ).eval()
-                    self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct",use_fast=True)
+                self.desc_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                    "Qwen/Qwen2.5-VL-3B-Instruct",
+                    torch_dtype=torch.bfloat16,
+                    attn_implementation="flash_attention_2",
+                    device_map="auto",
+                ).eval()
+                self.desc_processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct")
             elif description_model == "deepseek":
                 if not hasattr(self, 'desc_model'):
-                    
                     self.desc_model = AutoModelForCausalLM.from_pretrained(
                         "deepseek-ai/Janus-Pro-1B",
                         trust_remote_code=True,
@@ -498,14 +496,15 @@ class DocumentHandler:
                 img_path = os.path.join(output_folder, f"{pdf_name}-table-{table_counter}.png")
                 table_caption = element.caption_text(result.document).strip()
                 
-                with tempfile.NamedTemporaryFile(suffix=".png") as temp_file:
-                    element.get_image(result.document).save(temp_file.name, "PNG")
-                    if self._is_reference_table(self.ocr_reader.readtext(temp_file.name)):
-                        if verbose: print("Skipping reference table")
-                        continue
+                # Replace tempfile usage with direct image processing
+                table_image = element.get_image(result.document)
+                image_np = np.array(table_image)
+                if self._is_reference_table(self.ocr_reader.readtext(image_np)):
+                    if verbose: print("Skipping reference table")
+                    continue
                     
-                    final_img = self._embed_caption_in_image(Image.open(temp_file.name), table_caption) if add_caption else Image.open(temp_file.name)
-                    final_img.save(img_path, "PNG")
+                final_img = self._embed_caption_in_image(table_image, table_caption) if add_caption else table_image
+                final_img.save(img_path, "PNG")
 
                 # Add metadata
                 if generate_metadata:
@@ -558,12 +557,13 @@ class DocumentHandler:
                                         ]
                                     }]
                                 
-                                text = self.desc_processor.apply_chat_template(
+                                text = self.desc_processor.apply_chat_template(  # Debug point 1
                                     messages, tokenize=False, add_generation_prompt=True
                                 )
+
                                 image_inputs, video_inputs = process_vision_info(messages)
 
-                                inputs = self.desc_processor(
+                                inputs = self.desc_processor(  # Debug point 3 (error location)
                                     text=[text],
                                     images=image_inputs,
                                     videos=video_inputs,
@@ -572,10 +572,12 @@ class DocumentHandler:
                                 ).to(device)
 
                                 generated_ids = self.desc_model.generate(**inputs, max_new_tokens=128)
+
                                 generated_ids_trimmed = [
                                     out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)
                                 ]
-                                desc = self.desc_processor.batch_decode(
+
+                                desc = self.desc_processor.batch_decode(  # Debug point 6
                                     generated_ids_trimmed, 
                                     skip_special_tokens=True, 
                                     clean_up_tokenization_spaces=False
@@ -583,6 +585,7 @@ class DocumentHandler:
                                 
                             except Exception as e:
                                 desc = "Description generation failed"
+                                print(f"Error: {e}")
                         elif description_model == "deepseek":
                             conversation = [
                                 {
@@ -774,6 +777,7 @@ class DocumentHandler:
                                 desc = desc.replace("<|User|>", "").replace("<|Assistant|>", "").strip()
                             except Exception as e:
                                 desc = "Description generation failed"
+                                print(f"Error: {e}")
                     metadata.append({
                         "filename": os.path.basename(img_path),
                         "type": "picture",

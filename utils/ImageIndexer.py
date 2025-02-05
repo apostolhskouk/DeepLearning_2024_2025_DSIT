@@ -150,7 +150,6 @@ class CLIPIndexer:
         return self._query(query_text, top_k, "text")
 
     def _query(self, query_input, top_k, input_type):
-        torch.cuda.empty_cache()
         self._load_model()
         self._load_index()
         
@@ -211,7 +210,6 @@ class ColpaliIndexer:
         self._load_multimodal_components()
         try:
             with torch.no_grad(), torch.amp.autocast("cuda"):
-                print(f"Querying with text: {query_text}")
                 results = self._model.search(query_text, k=top_k)
             return [(r.metadata['filename'], r.score) for r in results]
         except Exception as e:
@@ -220,9 +218,7 @@ class ColpaliIndexer:
 
     def query_by_image(self, query_img_path, top_k=5):
         """Query using image input with enhanced error handling"""
-        torch.cuda.empty_cache()
         self._load_faiss_components()
-        torch.cuda.empty_cache()
         try:
             query_embedding = self._get_query_embedding(query_img_path)
             distances, indices = self._faiss_index.search(query_embedding, top_k)
@@ -238,7 +234,6 @@ class ColpaliIndexer:
                 del distances
             if 'indices' in locals():
                 del indices
-            torch.cuda.empty_cache()
 
     def _ensure_processor_initialized(self):
         """Ensure processor is initialized independently"""
@@ -248,10 +243,10 @@ class ColpaliIndexer:
     def _ensure_model_initialized(self):
         """Initialize both model and processor with proper checks"""
         if self._model is None:
-            torch.cuda.empty_cache()
             self._model = RAGMultiModalModel.from_pretrained(
                 self.model_name, 
-                index_root=self.index_path
+                index_root=self.index_path,
+                verbose=0
             )
             # Ensure processor is initialized with model
             self._ensure_processor_initialized()
@@ -264,7 +259,6 @@ class ColpaliIndexer:
         metadata = [{
             "filename": os.path.abspath(os.path.join(input_folder, f))
         } for f in os.listdir(input_folder) if f.endswith(".png")]
-        torch.cuda.empty_cache()
         self._model.index(
             input_path=Path(input_folder),
             index_name=self.index_name,
@@ -272,7 +266,6 @@ class ColpaliIndexer:
             metadata=metadata,
             overwrite=True
         )
-        torch.cuda.empty_cache()
 
     def _create_faiss_image_index(self, input_folder):
         """Create FAISS index for image embeddings"""
@@ -331,7 +324,6 @@ class ColpaliIndexer:
                 
                 embeddings.append(batch_emb)
                 del batch, outputs
-                torch.cuda.empty_cache()
                 
         return np.concatenate(embeddings)
     
@@ -347,7 +339,6 @@ class ColpaliIndexer:
 
     def _load_multimodal_components(self):
         """Load model components with processor initialization"""
-        print(f"Loading from path {self.index_path} with index {self.index_name}")
         if self._model is None:
             self._model = RAGMultiModalModel.from_index(
                 index_path=self.index_name,
@@ -362,12 +353,25 @@ class ColpaliIndexer:
         if self._faiss_index is None:
             self._faiss_index = faiss.read_index(os.path.join(str(self.index_path), "image_index.faiss"))
             self._image_paths = np.load(self.index_path/"image_paths.npy")
-
+    
+    def _ensure_model_initialized_inference(self):
+        """Initialize both model and processor with proper checks"""
+        if self._model is None:
+            self._model = RAGMultiModalModel.from_index(
+                index_path=self.index_name,
+                index_root=self.index_path
+            )
+            # Ensure processor is initialized with model
+            self._ensure_processor_initialized()
+            self._model.model.model.to(self._device)
+            self._model.model.model.gradient_checkpointing_enable()
+            self._model.model.model.config.use_cache = False
+            
     def _get_query_embedding(self, query_img_path):
         """Generate embedding for query image with proper error handling"""
-        query_embedding = None  # Initialize with default value
+        query_embedding = None  
         self._ensure_processor_initialized()
-        self._ensure_model_initialized()
+        self._ensure_model_initialized_inference()
         try:
             
             query_img = Image.open(query_img_path).convert("RGB")
@@ -393,7 +397,6 @@ class ColpaliIndexer:
                 
         except Exception as e:
             # Clean up resources before re-raising
-            torch.cuda.empty_cache()
             if 'query_img' in locals():
                 del query_img
             if 'processed' in locals():
@@ -407,7 +410,6 @@ class ColpaliIndexer:
 
     
 def visualize_results(results, input_folder=None):
-    plt.figure(figsize=(20, 10))
     for i, (path, score) in enumerate(results):
         try:
             # Determine the image path based on input_folder
@@ -417,15 +419,16 @@ def visualize_results(results, input_folder=None):
             else:
                 img_path = path
 
-            # Create subplot and display image
-            plt.subplot(1, len(results), i+1)
+            # Create a new figure for each image
+            plt.figure(figsize=(10, 10))  # Adjust size as needed
             plt.imshow(Image.open(img_path))
             plt.title(f"Rank {i+1}\nScore: {score:.3f}")
             plt.axis('off')
+            plt.tight_layout()
         except Exception as e:
             print(f"Error loading {img_path}: {str(e)}")
-    plt.tight_layout()
-    plt.show()
+    
+    plt.show()  # Show all figures at once
 
 byaldi_folder = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/index_byaldi"
 clip_folder = "/home/tolis/Desktop/tolis/DNN/project/DeepLearning_2024_2025_DSIT/demos/clip_embeddings"
