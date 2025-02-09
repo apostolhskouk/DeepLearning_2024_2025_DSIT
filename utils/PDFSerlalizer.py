@@ -26,6 +26,9 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel,AutoImageProcessor
 from janus.models import MultiModalityCausalLM, VLChatProcessor
 from transformers import AutoModelForCausalLM
+from huggingface_hub import hf_hub_download
+import joblib
+import importlib.util
 
 class DocumentHandler:
     """
@@ -370,7 +373,8 @@ class DocumentHandler:
         description_model = "qwen",
         generate_table_markdown=False,
         relevant_passages = 0,
-        prompt_passages = False
+        prompt_passages = False,
+        classify_images = False
     ):
         """
         Extracts images from PDF with captions, metadata, and annotated PDF support.
@@ -399,6 +403,35 @@ class DocumentHandler:
                     ).eval()
                     self.desc_processor = VLChatProcessor.from_pretrained("deepseek-ai/Janus-Pro-1B")
                     self.desc_tokenizer = self.desc_processor.tokenizer
+        if classify_images :
+            model_path = hf_hub_download(
+                repo_id="ApostolosK/svm-vgg-model",
+                filename="svm_vgg_model.pkl"
+            )
+
+            labels_path = hf_hub_download(
+                repo_id="ApostolosK/svm-vgg-model",
+                filename="labels.json"
+            )
+            with open(labels_path, 'r') as f:
+                labelNames = json.load(f)
+            preprocessor_path = hf_hub_download(
+                repo_id="ApostolosK/svm-vgg-model",
+                filename="svm_vgg_preprocessor.py"  
+            )
+            # Load the module from the specific path
+            spec = importlib.util.spec_from_file_location(
+                "svm_vgg_preprocessor", 
+                preprocessor_path
+            )
+            preprocessor = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(preprocessor)
+
+            # Now access the class
+            FeatureExtractor = preprocessor.FeatureExtractor
+            feature_extractor = FeatureExtractor()
+            svm_model = joblib.load(model_path)
+
         metadata = []
         pdf_name = Path(pdf_path).stem
         annotated_pdf_path = os.path.join(output_folder, f"{pdf_name}-annotated.pdf") if generate_annotated_pdf else None
@@ -636,7 +669,8 @@ class DocumentHandler:
                         "caption": table_caption or None,
                         "description": desc.strip() if generate_descriptions else None,
                         "markdown": table_markdown if generate_table_markdown else None,
-                        "relevant_passages": relevant_texts if relevant_passages > 0 else None
+                        "relevant_passages": relevant_texts if relevant_passages > 0 else None,
+                        "class" : "Table" if classify_images else None
                     })
 
             # Figure processing
@@ -778,6 +812,9 @@ class DocumentHandler:
                             except Exception as e:
                                 desc = "Description generation failed"
                                 print(f"Error: {e}")
+                    if classify_images:
+                        features = feature_extractor.extract_combined_features(img_path)
+                        label = svm_model.predict([features])[0]
                     metadata.append({
                         "filename": os.path.basename(img_path),
                         "type": "picture",
@@ -785,7 +822,8 @@ class DocumentHandler:
                         "bbox": bbox.model_dump(),
                         "caption": figure_caption or None,
                         "description": desc.strip() if generate_descriptions else None,
-                        "relevant_passages": relevant_texts if relevant_passages > 0 else None
+                        "relevant_passages": relevant_texts if relevant_passages > 0 else None,
+                        "class" : labelNames[label] if classify_images else None
                     })
 
         # Generate metadata file
@@ -828,5 +866,4 @@ class DocumentHandler:
             "annotated_pdf_path": annotated_pdf_path,
             "descriptions_generated": generate_descriptions
         }
-
 
