@@ -1,0 +1,400 @@
+[
+    {
+        "filename": "NEO-picture-1.png",
+        "type": "picture",
+        "page_no": 2,
+        "bbox": {
+            "l": 322.5809631347656,
+            "t": 53.3111572265625,
+            "r": 549.5149536132812,
+            "b": 204.64990234375,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 1: Neo system model",
+        "description": "The figure illustrates Neo's system model, showcasing how expert-optimized plans are generated for sample workloads and used to predict optimal execution plans for user queries, emphasizing the integration of runtime experience and latency in database query optimization.",
+        "relevant_passages": [
+            "application-provided Sample Workload consisting of queries representative of the application's total workload. Additionally, we assume Neo has access to a simple, traditional ruleor cost-based Expert Optimizer (e.g., Selinger [52], PostgreSQL [1]). This simple optimizer is treated as a black box, and is only used to create query execution plans (QEPs) for each query in the sample workload. These QEPs, along with their latencies, are added to Neo's Experience (i.e., a set of plan/latency pairs), which will be used as a starting point in the next model training phase. Note that the Expert Optimizer can be unrelated to the underlying Database Execution Engine .\nModel Building Given the collected experience, Neo builds an initial Value Model . The value model is a deep neural network with an architecture designed to predict the final execution time of a given partial or complete plan for a given query. We train the value network using the collected experience in a supervised fashion. This process involves transforming each user-submitted query into features (through the Featurizer module) useful for a machine learning model. These features contain both query-level information (e.g., the join graph, predicated attributes, etc.) and plan-level information (e.g., selected join order, access paths, etc.). Neo can work with a number of different featurization techniques, ranging from simple one-hot encodings (Section 3.2) to more complex embeddings (Section 5). Neo's value network uses tree convolution [40] to process the tree-structured QEPs (Section 4.1)."
+        ],
+        "class": "Block diagram"
+    },
+    {
+        "filename": "NEO-table-1.png",
+        "type": "table",
+        "page_no": 3,
+        "bbox": {
+            "l": 52.82837677001953,
+            "t": 52.944091796875,
+            "r": 555.7340087890625,
+            "b": 126.70623779296875,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Table 1: Traditional cost-based query optimizer vs. Neo",
+        "description": "The table illustrates a comparison between traditional cost-based query optimizers and Neo, highlighting differences in creation methods, query representation, cost models, plan space enumeration techniques, and cardinality estimation approaches.",
+        "markdown": "|                        | Traditional Optimizer           | Neural Optimizer (Neo)                            |\n|------------------------|---------------------------------|---------------------------------------------------|\n| Creation               | Human developers                | Demonstration, reinforcement learning (Section 2) |\n| Query Representation   | Operator tree                   | Feature encoding (Section 3)                      |\n| Cost Model             | Hand-crafted model              | Learned DNN model (Section 4)                     |\n| Plan Space Enumeration | Heuristics, dynamic programming | DNN-guided search strategy (Section 4.2)          |\n| Cardinality Estimation | Histograms, hand-crafted models | Histograms, learned embeddings (Section 5)        |",
+        "relevant_passages": [
+            "[59] F. Waas and A. Pellenkoft. Join Order Selection (Good Enough Is Easy). In Advances in Databases , BNCD '00, pages 51-67. Springer, Berlin, Heidelberg, July 2000.\n[60] W. Wang, M. Zhang, G. Chen, H. V. Jagadish, B. C. Ooi, and K.-L. Tan. Database Meets Deep Learning: Challenges and Opportunities. SIGMOD Rec. , 45(2):17-22, Sept. 2016.\n[61] C. J. Watkins and P. Dayan. Q-learning. Machine learning , 8(3-4):279-292, 1992.\n[62] L. Yu, J. Wang, K. R. Lai, and X. Zhang. Refining Word Embeddings Using Intensity Scores for Sentiment Analysis. IEEE/ACM Transactions on Audio, Speech, and Language Processing , 26(3):671-681, Mar. 2018.\n[63] J.-Y. Zhu, R. Zhang, D. Pathak, T. Darrell, A. A. Efros, O. Wang, and E. Shechtman. Toward Multimodal Image-to-Image Translation. In I. Guyon, U. V. Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Garnett, editors, Advances in Neural Information Processing Systems , NIPS '17, pages 465-476. Curran Associates, Inc., 2017.\n[64] S. Zilberstein. Using Anytime Algorithms in Intelligent Systems. AI Magazine , 17(3):73-73, Mar. 1996."
+        ],
+        "class": "Table"
+    },
+    {
+        "filename": "NEO-picture-2.png",
+        "type": "picture",
+        "page_no": 4,
+        "bbox": {
+            "l": 112.26823425292969,
+            "t": 52.20819091796875,
+            "r": 233.915283203125,
+            "b": 132.4818115234375,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 2: Partial query plan",
+        "description": "The figure illustrates a partial query plan tree, highlighting the execution order and data access paths for a database query, where MJ represents the main join, LJ is the logical join, and C indicates an index operation, while A, B, and D represent scan operations.",
+        "relevant_passages": [
+            "For a given query q , we define the set of base relations used in q as R q ( ). A partial execution plan P for a query q (denoted Q P ( ) = q ) is a forest of trees representing an execution plan that is still being built. Each internal (nonleaf) tree node is a join operator glyph[triangleright] glyph[triangleleft] i \u2208 J , where J is the set of possible join operators (e.g., hash join glyph[triangleright] glyph[triangleleft] H , merge join glyph[triangleright] glyph[triangleleft] M , loop join glyph[triangleright] glyph[triangleleft] L ) and each leaf tree node is either a table scan, an index scan, or an unspecified scan over a relation r \u2208 R q ( ), denoted T r ( ), I ( r ), and U r ( ) respectively. 1 An unspecified scan is a scan that has not been assigned as either a table or an index scan yet. For example, the partial query execution plan depicted in Figure 2 is denoted as:\n\nHere, the type of scan for B is still unspecified, as is the join that will eventually link B with the rest of the plan, but the plan specifies a table scan of table D and A , which feed into a merge join, whose result will then be joined using a loop join with C .\nA complete execution plan is a plan with only a single tree and with no unspecified scans; all decisions on how the plan should be executed have been made. We say that one execution plan P i is a subplan of another execution plan P j ,\n1 Neo can trivially handle additional scan types, e.g., bitmap scans.\n4\nFigure 3: Query-level encoding\nwritten P i \u2282 P j , if P j could be constructed from P i by (1) replacing unspecified scans with index or table scans, and (2) combining subtrees in P i with a join operator."
+        ],
+        "class": "Flow chart"
+    },
+    {
+        "filename": "NEO-picture-3.png",
+        "type": "picture",
+        "page_no": 4,
+        "bbox": {
+            "l": 335.73211669921875,
+            "t": 52.37054443359375,
+            "r": 537.99609375,
+            "b": 190.652099609375,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 3: Query-level encoding",
+        "description": "The figure illustrates a query-level encoding visualization for a SQL query involving join operations and column predicates, highlighting how data is represented in a structured format to facilitate efficient querying and processing.",
+        "relevant_passages": [
+            "For a given query q , we define the set of base relations used in q as R q ( ). A partial execution plan P for a query q (denoted Q P ( ) = q ) is a forest of trees representing an execution plan that is still being built. Each internal (nonleaf) tree node is a join operator glyph[triangleright] glyph[triangleleft] i \u2208 J , where J is the set of possible join operators (e.g., hash join glyph[triangleright] glyph[triangleleft] H , merge join glyph[triangleright] glyph[triangleleft] M , loop join glyph[triangleright] glyph[triangleleft] L ) and each leaf tree node is either a table scan, an index scan, or an unspecified scan over a relation r \u2208 R q ( ), denoted T r ( ), I ( r ), and U r ( ) respectively. 1 An unspecified scan is a scan that has not been assigned as either a table or an index scan yet. For example, the partial query execution plan depicted in Figure 2 is denoted as:\n\nHere, the type of scan for B is still unspecified, as is the join that will eventually link B with the rest of the plan, but the plan specifies a table scan of table D and A , which feed into a merge join, whose result will then be joined using a loop join with C .\nA complete execution plan is a plan with only a single tree and with no unspecified scans; all decisions on how the plan should be executed have been made. We say that one execution plan P i is a subplan of another execution plan P j ,\n1 Neo can trivially handle additional scan types, e.g., bitmap scans.\n4\nFigure 3: Query-level encoding\nwritten P i \u2282 P j , if P j could be constructed from P i by (1) replacing unspecified scans with index or table scans, and (2) combining subtrees in P i with a join operator."
+        ],
+        "class": "Flow chart"
+    },
+    {
+        "filename": "NEO-picture-4.png",
+        "type": "picture",
+        "page_no": 5,
+        "bbox": {
+            "l": 53.38947296142578,
+            "t": 52.821533203125,
+            "r": 296.02508544921875,
+            "b": 169.8046875,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 4: Plan-level encoding",
+        "description": "The figure illustrates a plan-level encoding visualization, showcasing how loops and merges are encoded using indices in a hierarchical structure, highlighting the relationship between different operations and their corresponding data structures.",
+        "relevant_passages": [
+            "Here, \u03c3 ( ) is a non-linear transformation (e.g., ReLU [14]), \u00b7 glyph[circledot] is a dot product, and x ' p is the output of the filter. Each filter thus combines information from the local neighborhood of a tree node (its children). The same filter is 'slid' across each tree in a execution plan, allowing a filter to be applied to execution plans with arbitrarily sized trees. A set of filters can be applied to a tree in order to produce another tree with the same structure, but with potentially different sized vectors representing each node. In a large neural network, such as those in our experimental evaluation, typically hundreds of filters are applied.\nSince the output of a tree convolution is also a tree with the same shape as the input (but with different sized vector representing each node), multiple layers of tree convolution filters can be sequentially applied to an execution plan. The first layer of tree convolution filters will access the augmented execution plan tree, and each filter will 'see' each parent/left child/right child triangle of the original tree. The amount of information seen by a particular filter is called the filter's receptive field [30]. The second layer of convolution filters will be applied to the output of the first, and thus each filter in this second layer will see information derived from a node n in the original augmented tree, n 's children, and n 's grandchildren. Thus, each tree convolution layer has a larger receptive field than the last. As a result, the first tree convolution layer will learn simple features (e.g., recognizing a merge join on top of a merge join), whereas the last tree convolution layer will learn complex features (e.g., recognizing a left-deep chain of merge joins).\nWe present two concrete examples in Figure 6 that show how the first layer of tree convolution can detect interesting patterns in query execution plans. In Example 1 of Figure 6a, we show two execution plans that differ only in the\n3 We attach nodes with all zeros to each leaf node.\n6\nFigure 6: Tree convolution examples"
+        ],
+        "class": "Tree Diagram"
+    },
+    {
+        "filename": "NEO-picture-5.png",
+        "type": "picture",
+        "page_no": 6,
+        "bbox": {
+            "l": 89.3998794555664,
+            "t": 52.2559814453125,
+            "r": 518.6326904296875,
+            "b": 145.45361328125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 5: Value network architecture",
+        "description": "The figure illustrates the Value Network architecture, showcasing how query-level and plan-level encodings are processed through fully connected layers, augmented tree structures, dynamic pooling, and convolutional operations to generate final outputs. Key variables include query embeddings, plan-level encodings, and network parameters such as dimensions and activation functions.",
+        "relevant_passages": [
+            "model's architecture to create an inductive bias [33] suitable for query optimization: the structure of the neural network itself is designed to reflect an intuitive understanding of what causes query plans to be fast or slow. Intuitively, humans studying query plans learn to recognize suboptimal or good plans by pattern matching: a merge join on top of a hash join with a shared join key is likely inducing a redundant sort or hash step; a loop join on top of two hash joins is likely to be highly sensitive to cardinality estimation errors; a hash join using a fact table as the 'build' relation is likely to incur spills; a series of merge joins that do not require re-sorting is likely to perform well, etc. Our insight is that all of these patterns can be recognized by analyzing subtrees of a query execution plan. Our model architecture is essentially a large bank of these patterns that are learned automatically, from the data itself , by taking advantage of a technique called tree convolution [40] (discussed in Section 4.1).\nAs shown in Figure 5, when a partial query plan is evaluated by the model, the query-level encoding is fed through a number of fully-connected layers, each decreasing in size. The vector outputted by the third fully connected layer is concatenated with the plan-level encoding, i.e., each tree node (the same vector is added to all tree nodes). This is a standard technique [53] known as 'spatial replication' [63] for combining data that has a fixed size (the query-level encoding) and data that is dynamically sized (the plan-level encoding). Once each tree node vector has been augmented, the forest of trees is sent through several tree convolution layers [40], an operation that maps trees to trees. Afterwards, a dynamic pooling operation [40] is applied, flattening the tree structure into a single vector. Several additional fully connected layers are used to map this vector into a single value, used as the model's cost prediction for the inputted execution plan. A formal description of the value network model is given in Appendix A."
+        ],
+        "class": "Block diagram"
+    },
+    {
+        "filename": "NEO-picture-6.png",
+        "type": "picture",
+        "page_no": 7,
+        "bbox": {
+            "l": 80.0302734375,
+            "t": 56.68194580078125,
+            "r": 529.4218139648438,
+            "b": 180.1639404296875,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 6: Tree convolution examples",
+        "description": "The figure illustrates tree convolution examples, demonstrating how merge joins and hash joins are applied to query trees, resulting in feature vectors for each node, which are then convolved using tree convolution filters to produce output sequences.",
+        "relevant_passages": [
+            "Common neural network models, like fully-connected neural networks or convolution neural networks, take as input tensors with a fixed structure, such as a vector or an image. In our problem, the features embedded in each execution plan are structured as nodes in a query plan tree (e.g., Figure 4). To process these features, we use tree convolution methods [40], an adaption of traditional image convolution for tree-structured data.\nTree convolution is a natural fit for this problem. Similar to the convolution transformation for images, tree convolution slides a set of shared filters over each part of the query tree locally. Intuitively, these filters can capture a wide variety of local parent-children relations. For example, filters can look for hash joins on top of merge joins, or a join of\ntwo relations when a particular predicate is present. The output of these filters provides signals utilized by the final layers of the value network; filter outputs could signify relevant factors such as when the children of a join operator are sorted on the key (in which case merge join is likely a good choice), or a filter might estimate if the right-side relation of a join will have low cardinality (indicating that an index may be useful). We provide two concrete examples later in this section.\nOperationally, since each node on the query tree has exactly two child nodes, 3 each filter consists of three weight vectors, e p , e l , e r . Each filter is applied to each local 'triangle' formed by the vector x p of a node and two of its left and right child, x l and x r to produce a new tree node x ' p :\n"
+        ],
+        "class": "Block diagram"
+    },
+    {
+        "filename": "NEO-picture-7.png",
+        "type": "picture",
+        "page_no": 9,
+        "bbox": {
+            "l": 57.16407012939453,
+            "t": 57.22210693359375,
+            "r": 168.68995666503906,
+            "b": 159.860595703125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 7: t-SNE projection of actor names embedded in the word2vec model. Column correlations across multiple IMDB tables show up as semantically meaningful clusters.",
+        "description": "The t-SNE projection visualizes actor names embedded in the word2vec model, revealing semantically meaningful clusters across multiple IMDB tables.",
+        "relevant_passages": [
+            "(b) Top actors in each genre\nthat are close together in the two-dimensional space are close together in the high dimensional space as well, and points that are far apart in the low dimensional space are far apart in the high dimensional space as well.\nAs shown, various semantic groups (e.g., Chinese actors, sci-fi movie actors) are clustered together (and are thus also close together in the original high-dimensional space), even when these semantic relationships span multiple tables. Intuitively, this provides helpful signals to estimate query latency given similar predicates: as many of the clusters in Figure 7 are linearly separable, their boundaries can be learned by machine learning algorithms. In other words, since predicates with similar semantic values (e.g., two American actors) are likely to have similar correlations (e.g., be in American films), representing the semantic value of a query predicate allows the value network to recognize similar predicates as similar. In Section 6.4.1, we find that row vectors consistently improves Neo's performance compared to other featurizations.\nRow vector construction In our implementation, the feature vectors for query predicates are constructed as follows. For every distinct value in the underlying database, we generate vectors which are a concatenation of the following:\n1. One-hot encoding of the comparison operators (e.g. equal or not equal to)\n2. Number of matched words\n3. Column embedding generated by word2vec (100 values, in our experiments)\n4. Number of times the given value is seen in the training\nThe concatenated vectors replace the '1's or '0's in the column predicate vector of 1-Hot representation of the querylevel information (see Section 3). For columns without a predicate, zeros are added so that the vector remains the same size regardless of the number of predicates."
+        ],
+        "class": "Scatter plot"
+    },
+    {
+        "filename": "NEO-picture-8.png",
+        "type": "picture",
+        "page_no": 9,
+        "bbox": {
+            "l": 178.82444763183594,
+            "t": 57.30474853515625,
+            "r": 288.8148193359375,
+            "b": 160.0474853515625,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "(a) Birthplace of each actor",
+        "description": "The t-SNE visualization in Figure (a) demonstrates the spatial distribution of actors' birthplaces across different genres, highlighting clusters for Romance and Sci-Fi, while other genres form a distinct group. This analysis reveals genre-specific patterns in actor origins, emphasizing the influence of cultural and thematic preferences on actor placement.",
+        "relevant_passages": [
+            "(b) Top actors in each genre\nthat are close together in the two-dimensional space are close together in the high dimensional space as well, and points that are far apart in the low dimensional space are far apart in the high dimensional space as well.\nAs shown, various semantic groups (e.g., Chinese actors, sci-fi movie actors) are clustered together (and are thus also close together in the original high-dimensional space), even when these semantic relationships span multiple tables. Intuitively, this provides helpful signals to estimate query latency given similar predicates: as many of the clusters in Figure 7 are linearly separable, their boundaries can be learned by machine learning algorithms. In other words, since predicates with similar semantic values (e.g., two American actors) are likely to have similar correlations (e.g., be in American films), representing the semantic value of a query predicate allows the value network to recognize similar predicates as similar. In Section 6.4.1, we find that row vectors consistently improves Neo's performance compared to other featurizations.\nRow vector construction In our implementation, the feature vectors for query predicates are constructed as follows. For every distinct value in the underlying database, we generate vectors which are a concatenation of the following:\n1. One-hot encoding of the comparison operators (e.g. equal or not equal to)\n2. Number of matched words\n3. Column embedding generated by word2vec (100 values, in our experiments)\n4. Number of times the given value is seen in the training\nThe concatenated vectors replace the '1's or '0's in the column predicate vector of 1-Hot representation of the querylevel information (see Section 3). For columns without a predicate, zeros are added so that the vector remains the same size regardless of the number of predicates."
+        ],
+        "class": "Scatter plot"
+    },
+    {
+        "filename": "NEO-table-2.png",
+        "type": "table",
+        "page_no": 9,
+        "bbox": {
+            "l": 335.94366455078125,
+            "t": 195.9832763671875,
+            "r": 536.5442504882812,
+            "b": 271.14971923828125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 8: Example query with correlationsTable 2: Similarity vs. Cardinality. In this case, correlated keywords and genres, as shown in the SQL query in Figure 8, also have higher similarity and higher cardinality.",
+        "description": "The figure illustrates a correlation analysis between keywords and genres in movies, highlighting how correlated keywords (e.g., \"love\" and \"fight\") exhibit higher similarity and cardinality compared to less correlated ones, demonstrating the importance of genre-based keyword correlations for accurate movie retrieval.",
+        "markdown": "| Keyword   | Genre   |   Similarity |   Cardinality |\n|-----------|---------|--------------|---------------|\n| love      | romance |         0.24 |         11128 |\n| love      | action  |         0.16 |          2157 |\n| love      | horror  |         0.09 |          1542 |\n| fight     | action  |         0.28 |         12177 |\n| fight     | romance |         0.21 |          3592 |\n| fight     | horror  |         0.05 |          1104 |",
+        "relevant_passages": [
+            "Here, we analyze the embedding space learned by our row vector approach on the IMDB dataset. We use the below SQL query from the IMDB database to illustrate how learned row vectors can be useful for tasks like cardinality estimation and query optimization.\nThis query counts the number of movies with genre 'romance' and containing the keyword 'love'. It spans five\n9\nSELECT\ncount(*)\nFROM\ntitle\nas\nt,\nmovie_keyword\nas\nmk,\nkeyword\nas\nk,\ninfo_type\nas\nit,\nmovie_info\nas\nmi\nWHERE it.id = 3\nAND it.id = mi.info_type_id\nAND mi.movie_id = t.id\nAND mk.keyword_id = k.id\nAND mk.movie_id = t.id\nAND k.keyword ILIKE ' %love% '\nAND mi.info ILIKE ' %romance% '\nFigure 8: Example query with correlations\nTable 2: Similarity vs. Cardinality. In this case, correlated keywords and genres, as shown in the SQL query in Figure 8, also have higher similarity and higher cardinality."
+        ],
+        "class": "Table"
+    },
+    {
+        "filename": "NEO-picture-9.png",
+        "type": "picture",
+        "page_no": 10,
+        "bbox": {
+            "l": 327.5546569824219,
+            "t": 56.11126708984375,
+            "r": 538.522705078125,
+            "b": 185.55615234375,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 9: Relative query performance to plans created by the native optimizer (lower is better) for different workloads",
+        "description": "The bar graph illustrates relative query performance for different workloads across PostgreSQL, SQLite, SQL Server, and Oracle databases, highlighting how native optimizer plans compare to those generated by JOB and Corporation.",
+        "relevant_passages": [
+            "Moreover, for MS SQL Server and the JOB and Corp workloads, the query plans produced by Neo are also 10% faster than the plans created by the commercial optimizers on their native platforms. Importantly, both commercial optimizers, which include a multi-phase search procedure and a dynamically-tuned cost model with hundreds of inputs [13,42], are expected to be substantially more advanced than PostgreSQL's optimizer. Yet, by bootstrapping only with PostgreSQL's optimizer, Neo is able to eventually outperform or match the performance of these commercial optimizers on their own platforms. Note that the faster execution times are solely based on better query plans without run-time modifications of the system. The only exception where Neo does not outperform the two commercial systems is for the TPC-H workload. We suspect that both MS SQL Server and Oracle were overtuned towards TPC-H, as it is one of the most common benchmarks.\nOverall, this experiment demonstrates that Neo is able to create plans, which are as good as, and sometimes even better than, open-source optimizers and their significantly superior commercial counterparts. However, Figure 9 only compares the median performance of Neo after the 100th training episode. This naturally raises the\nfollowing questions: (1) how does the performance compare with a fewer number of training episodes and how long does it take to train the model to a sufficient quality (answered in the next subsection), and (2) how robust is the optimizer to various imputations (answered in Section 6.4)."
+        ],
+        "class": "Bar plots"
+    },
+    {
+        "filename": "NEO-picture-10.png",
+        "type": "picture",
+        "page_no": 12,
+        "bbox": {
+            "l": 56.89531326293945,
+            "t": 61.68878173828125,
+            "r": 547.4443969726562,
+            "b": 316.5362243652344,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 10: Learning curves with variance. Shaded area spans minimum to maximum across fifty runs with different random seeds. For a plot with all four featurization techniques, please visit: http://rm.cab/l/lc.pdf",
+        "description": "The figure illustrates learning curves for various database systems (PostgreSQL, SQLite, MS SQL Server, Oracle) using different featureization techniques, highlighting normalized latency over iterations across fifty runs with varying random seeds.",
+        "relevant_passages": [
+            "Figure 12 shows the performance of Neo across all four DBMSes for the JOB dataset, varying the featurization used. Here, we examine both the regular R-Vector encoding and a variant of it built without any joins for denormalization (see Section 5). As expected, the 1-Hot encoding consistently performs the worst, as the 1-Hot encoding contains\nFigure 10: Learning curves with variance. Shaded area spans minimum to maximum across fifty runs with different random seeds. For a plot with all four featurization techniques, please visit: http://rm.cab/l/lc.pdf\nFigure 11: Training time, in minutes, for Neo to match the performance of PostgreSQL and each native optimizer.\nFigure 12: Neo's performance using each featurization.\nno information about predicate cardinality. The Histogram encoding, while making naive uniformity assumptions, provides enough information about predicate cardinality to improve Neo's performance. In each case, the R-Vector encoding variants produce the best overall performance, with the 'no joins' variant lagging slightly behind. This is because the R-Vector encoding contains significantly more semantic information about the underlying database than the naive histograms (see Section 5). The improved performance of R-Vector compared to the other encoding techniques demonstrates the benefits of tailoring the feature representation used to the underlying data."
+        ],
+        "class": "Block diagram"
+    },
+    {
+        "filename": "NEO-picture-11.png",
+        "type": "picture",
+        "page_no": 12,
+        "bbox": {
+            "l": 55.54864501953125,
+            "t": 378.61724853515625,
+            "r": 277.1435241699219,
+            "b": 514.2621459960938,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 11: Training time, in minutes, for Neo to match the performance of PostgreSQL and each native optimizer.",
+        "description": "The figure illustrates the training time in minutes for Neo to match the performance of PostgreSQL and native optimizers across different databases, highlighting the significant difference between neural network training times and query execution times.",
+        "relevant_passages": [
+            "To evaluate Neo's overall performance, we compared the mean execution time of the query plans generated by Neo on two open-source (PostgreSQL 11, SQLite 3.27.1), and two commercial (Oracle 12c, Microsoft SQL Server 2017 for Linux) database systems, with the execution time of the plans generated by each system's native optimizer, for each\n10\nFigure 9: Relative query performance to plans created by the native optimizer (lower is better) for different workloads\nof our three workloads. Due to the license terms [47] of Microsoft SQL Server and Oracle, we can only show performance in relative terms.\nFor initial experience collection for Neo, we always used the PostgreSQL optimizer as the expert. That is, for every query in the training set, we used the PostgreSQL optimizer to generate an initial query plan. We then measured the execution time of this plan on the target execution engine (e.g., MS SQL Server) by forcing the target system, through query hints, to obey the proposed query plan. Next, we directly begin training: Neo encodes the execution plan for each query in the training set, these plans are executed on the native system, and the encoded vectors along with the resulting run times are added to Neo's experience.\nFigure 9 shows the relative performance of Neo after 100 training iterations on each test workload, using the R-Vector encoding over the holdout dataset (lower is better). For example, with PostgreSQL and the JOB workload, Neo produces queries that take only 60% of average execution time than the ones created by the original PostgreSQL optimizer. Since the PostgreSQL optimizer is used to gather initial expertise for Neo, this demonstrates Neo's ability to improve upon an existing open-source optimizer."
+        ],
+        "class": "Bar plots"
+    },
+    {
+        "filename": "NEO-picture-12.png",
+        "type": "picture",
+        "page_no": 12,
+        "bbox": {
+            "l": 55.72731399536133,
+            "t": 558.9558715820312,
+            "r": 276.58245849609375,
+            "b": 694.1831665039062,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 12: Neo's performance using each featurization.",
+        "description": "The bar chart illustrates Neo's performance across different databases using various featureizations, highlighting R-Vectors, Histograms, and 1-Hot encoding, demonstrating relative efficiency in PostgreSQL, SQLite, SQL Server, and Oracle environments.",
+        "relevant_passages": [
+            "Figure 12 shows the performance of Neo across all four DBMSes for the JOB dataset, varying the featurization used. Here, we examine both the regular R-Vector encoding and a variant of it built without any joins for denormalization (see Section 5). As expected, the 1-Hot encoding consistently performs the worst, as the 1-Hot encoding contains\nFigure 10: Learning curves with variance. Shaded area spans minimum to maximum across fifty runs with different random seeds. For a plot with all four featurization techniques, please visit: http://rm.cab/l/lc.pdf\nFigure 11: Training time, in minutes, for Neo to match the performance of PostgreSQL and each native optimizer.\nFigure 12: Neo's performance using each featurization.\nno information about predicate cardinality. The Histogram encoding, while making naive uniformity assumptions, provides enough information about predicate cardinality to improve Neo's performance. In each case, the R-Vector encoding variants produce the best overall performance, with the 'no joins' variant lagging slightly behind. This is because the R-Vector encoding contains significantly more semantic information about the underlying database than the naive histograms (see Section 5). The improved performance of R-Vector compared to the other encoding techniques demonstrates the benefits of tailoring the feature representation used to the underlying data."
+        ],
+        "class": "Bar plots"
+    },
+    {
+        "filename": "NEO-picture-13.png",
+        "type": "picture",
+        "page_no": 13,
+        "bbox": {
+            "l": 59.28757858276367,
+            "t": 56.42333984375,
+            "r": 280.146484375,
+            "b": 191.89300537109375,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 13: Neo's performance on entirely new queries ( Ext-JOB ), full bar height. Neo's performance after 5 iterations with Ext-JOB queries, solid bar height.",
+        "description": "The figure illustrates Neo's performance on entirely new queries and after five iterations with Ext-JOB queries across PostgreSQL, SQLite, SQL Server, and Oracle databases using R-Vectors and histograms, highlighting relative performance differences.",
+        "relevant_passages": [
+            "Figure 12 shows the performance of Neo across all four DBMSes for the JOB dataset, varying the featurization used. Here, we examine both the regular R-Vector encoding and a variant of it built without any joins for denormalization (see Section 5). As expected, the 1-Hot encoding consistently performs the worst, as the 1-Hot encoding contains\nFigure 10: Learning curves with variance. Shaded area spans minimum to maximum across fifty runs with different random seeds. For a plot with all four featurization techniques, please visit: http://rm.cab/l/lc.pdf\nFigure 11: Training time, in minutes, for Neo to match the performance of PostgreSQL and each native optimizer.\nFigure 12: Neo's performance using each featurization.\nno information about predicate cardinality. The Histogram encoding, while making naive uniformity assumptions, provides enough information about predicate cardinality to improve Neo's performance. In each case, the R-Vector encoding variants produce the best overall performance, with the 'no joins' variant lagging slightly behind. This is because the R-Vector encoding contains significantly more semantic information about the underlying database than the naive histograms (see Section 5). The improved performance of R-Vector compared to the other encoding techniques demonstrates the benefits of tailoring the feature representation used to the underlying data."
+        ],
+        "class": "Bar plots"
+    },
+    {
+        "filename": "NEO-picture-14.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 59.25773239135742,
+            "t": 54.62286376953125,
+            "r": 177.11119079589844,
+            "b": 140.3653564453125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": null,
+        "description": "The figure illustrates a normalized frequency distribution of network output values for PostgreSQL databases with \u22643 joins, showing how error levels (0, 2, and 5) affect the distribution's shape and spread.",
+        "relevant_passages": [
+            "model's architecture to create an inductive bias [33] suitable for query optimization: the structure of the neural network itself is designed to reflect an intuitive understanding of what causes query plans to be fast or slow. Intuitively, humans studying query plans learn to recognize suboptimal or good plans by pattern matching: a merge join on top of a hash join with a shared join key is likely inducing a redundant sort or hash step; a loop join on top of two hash joins is likely to be highly sensitive to cardinality estimation errors; a hash join using a fact table as the 'build' relation is likely to incur spills; a series of merge joins that do not require re-sorting is likely to perform well, etc. Our insight is that all of these patterns can be recognized by analyzing subtrees of a query execution plan. Our model architecture is essentially a large bank of these patterns that are learned automatically, from the data itself , by taking advantage of a technique called tree convolution [40] (discussed in Section 4.1).\nAs shown in Figure 5, when a partial query plan is evaluated by the model, the query-level encoding is fed through a number of fully-connected layers, each decreasing in size. The vector outputted by the third fully connected layer is concatenated with the plan-level encoding, i.e., each tree node (the same vector is added to all tree nodes). This is a standard technique [53] known as 'spatial replication' [63] for combining data that has a fixed size (the query-level encoding) and data that is dynamically sized (the plan-level encoding). Once each tree node vector has been augmented, the forest of trees is sent through several tree convolution layers [40], an operation that maps trees to trees. Afterwards, a dynamic pooling operation [40] is applied, flattening the tree structure into a single vector. Several additional fully connected layers are used to map this vector into a single value, used as the model's cost prediction for the inputted execution plan. A formal description of the value network model is given in Appendix A."
+        ],
+        "class": "Graph plots"
+    },
+    {
+        "filename": "NEO-picture-15.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 183.18699645996094,
+            "t": 55.3045654296875,
+            "r": 300.62725830078125,
+            "b": 126.83746337890625,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "(b) PostgreSQL, > 3 joins",
+        "description": "The figure illustrates a normalized frequency distribution of PostgreSQL query execution times for queries involving more than three joins, highlighting how error magnitudes (0, 2, and 5) affect the distribution's shape and spread.",
+        "relevant_passages": [
+            "The strong relationship between cardinality estimation and query optimization is well-studied [4, 39]. However, query optimizers must take into account that most cardinality estimation methods tend to become significantly less accurate when the number of joins increases [25]. While deep neural networks are generally regraded as black boxes, here we show that Neo is capable of learning when to trust cardinality estimates and when to ignore them.\nTo measure the robustness of Neo to cardinality estimation errors, we trained two Neo models, with an additional feature at each tree node. The first model received the PostgreSQL optimizer's cardinality estimation, and the second model received the true cardinality. We then plotted a histogram of both model's outputs across the JOB workload when the number of joins was \u2264 3 and > 3, introducing artificial error to the additional features.\nFor example, Figure 14a shows the histogram of value network predictions for all states with at most 3 joins. When the error is increased from zero orders of magnitude to two and five orders of magnitude, the variance of the distribution increases: in other words, when the number of joins is at most 3, Neo learns a model that varies with the PostgreSQL cardinality estimate. However, in Figure 14b, we see that\n13\nthe distribution of network outputs hardly changes at all when the number of joins is greater than 3: in other words, when the number of joins is greater than 3, Neo learns to ignore the PostgreSQL cardinality estimates all together.\nOn the other hand, Figure 14c and Figure 14d show that when Neo's value model is trained with true cardinalities as inputs, Neo learns a model that varies its prediction with the cardinality regardless of the number of joins. In other words, when provided with true cardinalities, Neo learns to rely on the cardinality information irrespective of the number of joins. Thus, we conclude that Neo is able to learn which input features are reliable, even when the reliability of those features varies with the number of joins."
+        ],
+        "class": "Graph plots"
+    },
+    {
+        "filename": "NEO-picture-16.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 306.5120849609375,
+            "t": 55.50787353515625,
+            "r": 423.9985046386719,
+            "b": 127.39410400390625,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": null,
+        "description": "The figure illustrates a normalized frequency distribution of value network outputs for different error magnitudes (0, 2, and 5), demonstrating how errors affect the output distribution's shape and spread.",
+        "relevant_passages": [
+            "model's architecture to create an inductive bias [33] suitable for query optimization: the structure of the neural network itself is designed to reflect an intuitive understanding of what causes query plans to be fast or slow. Intuitively, humans studying query plans learn to recognize suboptimal or good plans by pattern matching: a merge join on top of a hash join with a shared join key is likely inducing a redundant sort or hash step; a loop join on top of two hash joins is likely to be highly sensitive to cardinality estimation errors; a hash join using a fact table as the 'build' relation is likely to incur spills; a series of merge joins that do not require re-sorting is likely to perform well, etc. Our insight is that all of these patterns can be recognized by analyzing subtrees of a query execution plan. Our model architecture is essentially a large bank of these patterns that are learned automatically, from the data itself , by taking advantage of a technique called tree convolution [40] (discussed in Section 4.1).\nAs shown in Figure 5, when a partial query plan is evaluated by the model, the query-level encoding is fed through a number of fully-connected layers, each decreasing in size. The vector outputted by the third fully connected layer is concatenated with the plan-level encoding, i.e., each tree node (the same vector is added to all tree nodes). This is a standard technique [53] known as 'spatial replication' [63] for combining data that has a fixed size (the query-level encoding) and data that is dynamically sized (the plan-level encoding). Once each tree node vector has been augmented, the forest of trees is sent through several tree convolution layers [40], an operation that maps trees to trees. Afterwards, a dynamic pooling operation [40] is applied, flattening the tree structure into a single vector. Several additional fully connected layers are used to map this vector into a single value, used as the model's cost prediction for the inputted execution plan. A formal description of the value network model is given in Appendix A."
+        ],
+        "class": "Graph plots"
+    },
+    {
+        "filename": "NEO-picture-17.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 429.9306335449219,
+            "t": 55.41156005859375,
+            "r": 547.073974609375,
+            "b": 126.41290283203125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "(d) True cardinality, > 3 joins",
+        "description": "The figure illustrates a normalized frequency distribution of network outputs for different error levels, demonstrating how the cardinality of joins varies across these distributions.",
+        "relevant_passages": [
+            "The strong relationship between cardinality estimation and query optimization is well-studied [4, 39]. However, query optimizers must take into account that most cardinality estimation methods tend to become significantly less accurate when the number of joins increases [25]. While deep neural networks are generally regraded as black boxes, here we show that Neo is capable of learning when to trust cardinality estimates and when to ignore them.\nTo measure the robustness of Neo to cardinality estimation errors, we trained two Neo models, with an additional feature at each tree node. The first model received the PostgreSQL optimizer's cardinality estimation, and the second model received the true cardinality. We then plotted a histogram of both model's outputs across the JOB workload when the number of joins was \u2264 3 and > 3, introducing artificial error to the additional features.\nFor example, Figure 14a shows the histogram of value network predictions for all states with at most 3 joins. When the error is increased from zero orders of magnitude to two and five orders of magnitude, the variance of the distribution increases: in other words, when the number of joins is at most 3, Neo learns a model that varies with the PostgreSQL cardinality estimate. However, in Figure 14b, we see that\n13\nthe distribution of network outputs hardly changes at all when the number of joins is greater than 3: in other words, when the number of joins is greater than 3, Neo learns to ignore the PostgreSQL cardinality estimates all together.\nOn the other hand, Figure 14c and Figure 14d show that when Neo's value model is trained with true cardinalities as inputs, Neo learns a model that varies its prediction with the cardinality regardless of the number of joins. In other words, when provided with true cardinalities, Neo learns to rely on the cardinality information irrespective of the number of joins. Thus, we conclude that Neo is able to learn which input features are reliable, even when the reliability of those features varies with the number of joins."
+        ],
+        "class": "Graph plots"
+    },
+    {
+        "filename": "NEO-picture-18.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 54.26942443847656,
+            "t": 173.83502197265625,
+            "r": 551.22705078125,
+            "b": 272.6934814453125,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 14: Robustness to cardinality estimation errorsFigure 15: Workload cost vs. relative cost for JOB queries between Neo and PostgreSQL (lower is better)",
+        "description": "The figure illustrates the robustness of cardinality estimation errors in PostgreSQL compared to Neo, showing workload cost and relative cost for JOB queries between the two systems, with lower costs indicating better performance.",
+        "relevant_passages": [
+            "Figure 12 shows the performance of Neo across all four DBMSes for the JOB dataset, varying the featurization used. Here, we examine both the regular R-Vector encoding and a variant of it built without any joins for denormalization (see Section 5). As expected, the 1-Hot encoding consistently performs the worst, as the 1-Hot encoding contains\nFigure 10: Learning curves with variance. Shaded area spans minimum to maximum across fifty runs with different random seeds. For a plot with all four featurization techniques, please visit: http://rm.cab/l/lc.pdf\nFigure 11: Training time, in minutes, for Neo to match the performance of PostgreSQL and each native optimizer.\nFigure 12: Neo's performance using each featurization.\nno information about predicate cardinality. The Histogram encoding, while making naive uniformity assumptions, provides enough information about predicate cardinality to improve Neo's performance. In each case, the R-Vector encoding variants produce the best overall performance, with the 'no joins' variant lagging slightly behind. This is because the R-Vector encoding contains significantly more semantic information about the underlying database than the naive histograms (see Section 5). The improved performance of R-Vector compared to the other encoding techniques demonstrates the benefits of tailoring the feature representation used to the underlying data."
+        ],
+        "class": "Graph plots"
+    },
+    {
+        "filename": "NEO-picture-19.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 54.96733856201172,
+            "t": 313.963134765625,
+            "r": 279.6403503417969,
+            "b": 453.5768127441406,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 16: Search time vs. performance, grouped by number of joins",
+        "description": "The figure illustrates a stacked bar chart depicting search time versus performance, grouped by the number of joins in a database query optimization context, highlighting how increasing join counts impact search efficiency and resource utilization.",
+        "relevant_passages": [
+            "Neo uses the trained value network to search for query plans until a fixed-time cutoff (see Section 4.2). Figure 16 shows how the performance of a query with a particular number of joins (selected randomly from the JOB dataset, executed on PostgreSQL) varies as the search time is changed (previous experiments used a fixed cutoff of 250ms). Note that the x-axis skips some values, e.g. the JOB dataset has no queries with 13 joins. Here, query performance is given relative to the best observed performance. For example, when the number of joins is 10, Neo found the best-observed plan whenever the cutoff time was greater than 120ms. We also tested significantly extending the search time (to 5 minutes), and found that such an extension did not change query performance regardless of the number of joins in the query (up to 17 in the JOB dataset).\n7 Query 29b regresses by 43 milliseconds.\n(b) PostgreSQL, > 3 joins\n(c) True cardinality,\n\u2264\n3 joins\n(d) True cardinality, > 3 joins\nFigure 14: Robustness to cardinality estimation errors\nFigure 15: Workload cost vs. relative cost for JOB queries between Neo and PostgreSQL (lower is better)\nFigure 16: Search time vs. performance, grouped by number of joins\nThe relationship between the number of joins and sensitivity to search time is unsurprising: queries with more joins have a larger search space, and thus require more time to optimize. While 250ms to optimize a query with 17 joins is acceptable in many scenarios, other options [59] may be more desirable when this is not the case."
+        ],
+        "class": "Confusion matrix"
+    },
+    {
+        "filename": "NEO-picture-20.png",
+        "type": "picture",
+        "page_no": 14,
+        "bbox": {
+            "l": 322.4154357910156,
+            "t": 314.183837890625,
+            "r": 543.6566162109375,
+            "b": 448.82232666015625,
+            "coord_origin": "TOPLEFT"
+        },
+        "caption": "Figure 17: Row vector training time",
+        "description": "The bar chart illustrates the row vector training time for three datasets (JOB, TPC-H, and Corp) with and without joins, highlighting significant differences in computation efficiency.",
+        "relevant_passages": [
+            "Since gathering demonstration data introduces additional complexity to the system, it is natural to ask if demonstration data is necessary at all. Is it possible to learn a good policy starting from zero knowledge? While previous work [34] showed that an off-the-shelf deep reinforcement learning technique can learn to find query plans that minimize a cost model without demonstration data, learning a policy based on query latency (i.e., end to end) poses additional difficulties: a bad plan can take hours to execute. Unfortunately, randomly chosen query plans behave exceptionally poorly. Leis et al. showed that randomly sampled join orderings can result in a 100x to 1000x increase in query execution times for JOB queries, compared to a reasonable plan [25], potentially increasing the training time of Neo by a similar factor [35].\nWeattempted to work around this problem by selecting an ad-hoc query timeout t (e.g., 5 minutes), and terminating query executions when their latencies exceed t . However, this technique destroys a good amount of the signal that Neo uses to learn: join patterns resulting in a latency of 7 minutes get the same reward as join patterns resulting in a latency of 1 week, and thus Neo cannot learn that the join patterns in the 7-minute plan are an improvement over the 1-week plan. As a result, even after training for over three weeks, we did not achieve the plan quality that we achieve when bootstrapping the system with the PostgreSQL optimizer."
+        ],
+        "class": "Bar plots"
+    }
+]
